@@ -336,8 +336,7 @@ function M.switch()
       "codex 正在 "
         .. pane.agent_status
         .. "，请先等待完成或用 "
-        .. config.options.prefix
-        .. (config.options.keys.interrupt or "x")
+        .. config.key_hint("interrupt", "<leader>hx")
         .. " 中断后再切换"
     )
     return

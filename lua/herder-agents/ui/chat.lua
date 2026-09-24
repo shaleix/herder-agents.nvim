@@ -619,7 +619,7 @@ local function cli_pane(name)
   local tab_id = current_herdr_tab_id()
   local pane = herdr_find_pane(name, tab_id)
   if not pane then
-    local hint = config.options.prefix .. (config.options.keys.toggle or "o")
+    local hint = config.key_hint("toggle", "<leader>ho")
     utils.err(name .. " pane not found; use " .. hint .. " first")
   end
   return pane

@@ -38,22 +38,22 @@
 
 ## 快捷键
 
-默认前缀 `<leader>h`（`prefix` 可改；单项置 `false` 关闭）：
+默认绑定如下；每个功能在 `keys` 中独立配置**完整 lhs**，可任意混用前缀（单项置 `false` 关闭）：
 
-| 按键 | 模式 | 功能 |
-| --- | --- | --- |
-| `<leader>ho` | n | 打开/关闭当前工具的 herdr pane；已存在时切换 pane zoom |
-| `<leader>he` | n | 打开 prompt 输入弹窗 |
-| `<leader>he` | x | 同上，选区格式化为 `@path (lines a-b)` + fence 预填草稿 |
-| `<leader>hx` | n/x | 中断当前工具（按工具的 `interrupt_key`，默认 `ctrl+c`） |
-| `<leader>hc` | n/x | 新会话（默认 `/clear`，codex/opencode 为 `/new`） |
-| `<leader>hh` | n/x | prompt 历史（按 cwd 分组），回车回填到输入弹窗 |
-| `<leader>ht` | n | 切换工具（fzf-lua / `vim.ui.select`） |
-| `<leader>hr` | n/x | 当前缓冲区加入只读上下文（非 herdr 后端） |
-| `<leader>ha` | n/x | 当前缓冲区加入可编辑上下文（非 herdr 后端） |
-| `<leader>hs` | n/x | 恢复历史会话（agentic 后端） |
-| `<leader>hy` | n/x | 切换 provider/agent（agentic 后端） |
-| `<leader>hm` | n/x | 切换 codex 的 provider/model（`/quit` 后 `codex resume` 恢复会话） |
+| 按键 | 模式 | 功能 | keys 字段 |
+| --- | --- | --- | --- |
+| `<leader>ho` | n | 打开/关闭当前工具的 herdr pane；已存在时切换 pane zoom | `toggle` |
+| `<leader>he` | n | 打开 prompt 输入弹窗 | `input` |
+| `<leader>he` | x | 同上，选区格式化为 `@path (lines a-b)` + fence 预填草稿 | `input` |
+| `<leader>hx` | n/x | 中断当前工具（按工具的 `interrupt_key`，默认 `ctrl+c`） | `interrupt` |
+| `<leader>hc` | n/x | 新会话（默认 `/clear`，codex/opencode 为 `/new`） | `new_session` |
+| `<leader>hh` | n/x | prompt 历史（按 cwd 分组），回车回填到输入弹窗 | `history` |
+| `<leader>ht` | n | 切换工具（fzf-lua / `vim.ui.select`） | `switch` |
+| `<leader>hr` | n/x | 当前缓冲区加入只读上下文（非 herdr 后端） | `read_buffer` |
+| `<leader>ha` | n/x | 当前缓冲区加入可编辑上下文（非 herdr 后端） | `add_buffer` |
+| `<leader>hs` | n/x | 恢复历史会话（agentic 后端） | `select_session` |
+| `<leader>hy` | n/x | 切换 provider/agent（agentic 后端） | `switch_provider` |
+| `<leader>hm` | n/x | 切换 codex 的 provider/model（`/quit` 后 `codex resume` 恢复会话） | `codex_model` |
 
 prompt 弹窗内：
 
@@ -121,19 +121,37 @@ require("herder-agents").setup({
 
   agentic = true, -- 探测到 agentic 插件时自动注册后端
   commands = { toggle = "AIToggle", switch = "AISwitch" },
-  prefix = "<leader>h",
   keys = {
-    toggle = "o",
-    input = "e",
-    interrupt = "x",
-    new_session = "c",
-    history = "h",
-    switch = "t",
-    read_buffer = "r",
-    add_buffer = "a",
-    select_session = "s",
-    switch_provider = "y",
-    codex_model = "m",
+    toggle = "<leader>ho",
+    input = "<leader>he",
+    interrupt = "<leader>hx",
+    new_session = "<leader>hc",
+    history = "<leader>hh",
+    switch = "<leader>ht",
+    read_buffer = "<leader>hr",
+    add_buffer = "<leader>ha",
+    select_session = "<leader>hs",
+    switch_provider = "<leader>hy",
+    codex_model = "<leader>hm",
+  },
+})
+```
+
+### 自定义快捷键
+
+`keys` 的每个值支持三种形式，前缀可任意混用：
+
+```lua
+require("herder-agents").setup({
+  keys = {
+    toggle = "<leader>ox", -- string：完整 lhs，mode 用默认值
+    input = "<leader>ie", -- 不同前缀混用
+    interrupt = { -- table：完整 spec，可覆盖 mode / desc
+      "<leader>xx",
+      mode = { "n", "i" },
+      desc = "Stop the agent",
+    },
+    history = false, -- false：不注册，之后可用 API 自行 vim.keymap.set
   },
 })
 ```

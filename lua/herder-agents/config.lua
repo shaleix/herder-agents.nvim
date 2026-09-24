@@ -71,20 +71,23 @@ M.defaults = {
     switch = "AISwitch",
   },
 
-  -- 快捷键前缀与后缀（单个置 false 关闭）
-  prefix = "<leader>h",
+  -- 快捷键：每个功能独立配置完整 lhs，可任意混用前缀（如 toggle 用 <leader>ox、
+  -- input 用 <leader>he）。值支持三种形式：
+  --   string  完整 lhs，如 "<leader>ho"（mode 用该功能的默认值）
+  --   table   { "<leader>ai", mode = { "n", "i" }, desc = "自定义描述" }
+  --   false   关闭该映射（之后可用 API 自行 vim.keymap.set）
   keys = {
-    toggle = "o", -- 打开/关闭当前工具的 herdr pane（已存在时切换 zoom）
-    input = "e", -- 打开 prompt 输入弹窗；visual 模式预填选区上下文
-    interrupt = "x", -- 中断当前工具
-    new_session = "c", -- 新会话
-    history = "h", -- prompt 历史
-    switch = "t", -- 切换工具
-    read_buffer = "r", -- 当前缓冲区加入只读上下文（非 herdr 后端）
-    add_buffer = "a", -- 当前缓冲区加入可编辑上下文（非 herdr 后端）
-    select_session = "s", -- 恢复历史会话（agentic）
-    switch_provider = "y", -- 切换 provider/agent（agentic）
-    codex_model = "m", -- 切换 codex 的 provider/model
+    toggle = "<leader>ho", -- 打开/关闭工具 pane（已存在时切换 zoom）；默认 n
+    input = "<leader>he", -- prompt 输入弹窗；默认 n + x（x 预填选区上下文）
+    interrupt = "<leader>hx", -- 中断当前工具；默认 n + x
+    new_session = "<leader>hc", -- 新会话；默认 n + x
+    history = "<leader>hh", -- prompt 历史；默认 n + x
+    switch = "<leader>ht", -- 切换工具；默认 n
+    read_buffer = "<leader>hr", -- 当前缓冲区加入只读上下文（非 herdr 后端）；默认 n + x
+    add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑上下文（非 herdr 后端）；默认 n + x
+    select_session = "<leader>hs", -- 恢复历史会话（agentic 后端）；默认 n + x
+    switch_provider = "<leader>hy", -- 切换 provider/agent（agentic 后端）；默认 n + x
+    codex_model = "<leader>hm", -- 切换 codex 的 provider/model；默认 n + x
   },
 }
 
@@ -135,6 +138,22 @@ function M.tool_cmd(name)
     return overrides[name]
   end
   return M.options.tool_cmds[name]
+end
+
+-- 取某功能当前绑定的 lhs（用于错误/提示消息，如 "use <leader>ho first"）；
+-- 未绑定时返回 fallback
+---@param action string
+---@param fallback string
+---@return string
+function M.key_hint(action, fallback)
+  local spec = M.options.keys[action]
+  if type(spec) == "string" then
+    return spec
+  end
+  if type(spec) == "table" and type(spec[1]) == "string" then
+    return spec[1]
+  end
+  return fallback
 end
 
 return M

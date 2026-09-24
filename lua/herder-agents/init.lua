@@ -4,13 +4,13 @@
 -- AI 工具操作集：在 Herdr pane 中驱动 CLI 编码 agent（opencode / codex / qodercli /
 -- crush / omp / pi / hermes...），并支持通过 register_tool() 接入非 herdr 后端（如 agentic）。
 --
--- 默认快捷键（前缀 <leader>h，可在 setup 中改）：
---   ho 打开/关闭工具 pane（已存在时切换 zoom）
---   he prompt 输入弹窗（visual 模式预填选区上下文）
---   hx 中断    hc 新会话    hh prompt 历史    ht 切换工具
---   hr/ha 当前缓冲区加入只读/可编辑上下文（非 herdr 后端）
---   hs 恢复会话 / hy 切换 provider（agentic 后端）
---   hm 切换 codex 的 provider/model
+-- 默认快捷键（keys 配置项逐个可改，支持任意前缀混用，单项置 false 关闭）：
+--   <leader>ho 打开/关闭工具 pane（已存在时切换 zoom）
+--   <leader>he prompt 输入弹窗（visual 模式预填选区上下文）
+--   <leader>hx 中断    <leader>hc 新会话    <leader>hh prompt 历史    <leader>ht 切换工具
+--   <leader>hr/<leader>ha 当前缓冲区加入只读/可编辑上下文（非 herdr 后端）
+--   <leader>hs 恢复会话 / <leader>hy 切换 provider（agentic 后端）
+--   <leader>hm 切换 codex 的 provider/model
 --
 -- 命令：:AIToggle [tool]（<leader>ho 的命令版，供 worktree_hook.sh 等外部脚本调用）
 --       :AISwitch [tool]（无参数时循环切换）
@@ -128,7 +128,7 @@ setup_commands = function()
       complete = function()
         return tools.names()
       end,
-      desc = "Toggle AI tool (same as " .. config.options.prefix .. (config.options.keys.toggle or "o") .. ")",
+      desc = "Toggle AI tool (same as " .. config.key_hint("toggle", "<leader>ho") .. ")",
     })
   end
 
@@ -156,80 +156,108 @@ end
 -- ---------------------------------------------------------------------------
 
 setup_keymaps = function()
-  local prefix = config.options.prefix
   local keys = config.options.keys
 
-  local function map(suffix, rhs, desc, modes)
-    if not keys[suffix] then
-      return
+  -- 解析 keys[action]：返回 lhs, modes, desc_override
+  local function resolve(action, default_modes)
+    local spec = keys[action]
+    if not spec then
+      return nil, nil, nil
     end
-    vim.keymap.set(modes or { "n" }, prefix .. keys[suffix], rhs, { desc = desc })
+    if type(spec) == "table" then
+      return spec[1], spec.mode or default_modes, spec.desc
+    end
+    return spec, default_modes, nil
   end
 
-  map("toggle", function()
+  local function map(action, default_modes, rhs, desc)
+    local lhs, modes, desc_override = resolve(action, default_modes)
+    if not lhs then
+      return
+    end
+    vim.keymap.set(modes, lhs, rhs, { desc = desc_override or desc })
+  end
+
+  map("toggle", { "n" }, function()
     M.toggle()
   end, "Toggle AI")
 
-  map("input", function()
-    M.input()
-  end, "AI Chat (prompt)")
-
-  -- 可视模式：把选区格式化为 @path (lines a-b) + fence 上下文，预填进草稿
-  if keys.input then
-    vim.keymap.set("x", prefix .. keys.input, function()
-      M.input(require("herder-agents.context").selection())
-    end, { desc = "AI Chat (prompt)" })
+  -- input：n 与 x 的 rhs 不同（x 预填选区上下文），按 mode 拆开注册
+  do
+    local lhs, modes, desc_override = resolve("input", { "n", "x" })
+    if lhs then
+      local plain_modes, visual_modes = {}, {}
+      for _, m in ipairs(modes) do
+        if m == "x" or m == "v" then
+          table.insert(visual_modes, m)
+        else
+          table.insert(plain_modes, m)
+        end
+      end
+      local desc = desc_override or "AI Chat (prompt)"
+      if #plain_modes > 0 then
+        vim.keymap.set(plain_modes, lhs, function()
+          M.input()
+        end, { desc = desc })
+      end
+      -- 可视模式：把选区格式化为 @path (lines a-b) + fence 上下文，预填进草稿
+      if #visual_modes > 0 then
+        vim.keymap.set(visual_modes, lhs, function()
+          M.input(require("herder-agents.context").selection())
+        end, { desc = desc })
+      end
+    end
   end
 
-  map("interrupt", function()
+  map("interrupt", { "n", "x" }, function()
     M.interrupt()
-  end, "AI interrupt session", { "n", "x" })
+  end, "AI interrupt session")
 
-  map("new_session", function()
+  map("new_session", { "n", "x" }, function()
     M.new_session()
-  end, "AI new session", { "n", "x" })
+  end, "AI new session")
 
-  map("history", function()
+  map("history", { "n", "x" }, function()
     M.history()
-  end, "AI Chat History", { "n", "x" })
+  end, "AI Chat History")
 
-  map("switch", function()
+  map("switch", { "n" }, function()
     M.switch_tool()
   end, "Switch AI tool")
 
-  map("read_buffer", function()
+  map("read_buffer", { "n", "x" }, function()
     local backend = tools.backend()
     if backend and backend.read_buffer then
       backend.read_buffer()
     end
-  end, "AI read current buffer", { "n", "x" })
+  end, "AI read current buffer")
 
-  map("add_buffer", function()
+  map("add_buffer", { "n", "x" }, function()
     local backend = tools.backend()
     if backend and backend.add_buffer then
       backend.add_buffer()
     end
-  end, "AI add current buffer", { "n", "x" })
+  end, "AI add current buffer")
 
-  map("select_session", function()
+  map("select_session", { "n", "x" }, function()
     local backend = tools.backend()
     if backend and backend.select_session then
       backend.select_session()
     end
-  end, "AI select session", { "n", "x" })
+  end, "AI select session")
 
-  map("switch_provider", function()
+  map("switch_provider", { "n", "x" }, function()
     local backend = tools.backend()
     if backend and backend.switch_provider then
       backend.switch_provider()
     end
-  end, "AI cycle agent", { "n", "x" })
+  end, "AI cycle agent")
 
   -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
   -- 用 codex resume <session> -m <model> -c model_provider=<provider> 重启
-  map("codex_model", function()
+  map("codex_model", { "n", "x" }, function()
     M.switch_codex_model()
-  end, "AI switch codex model", { "n", "x" })
+  end, "AI switch codex model")
 end
 
 -- ---------------------------------------------------------------------------

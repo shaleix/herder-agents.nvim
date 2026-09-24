@@ -83,8 +83,23 @@ check(true, "无 HERDR_ENV 时 toggle 不抛异常")
 -- context.selection 无选区时返回 nil
 check(require("herder-agents.context").selection() == nil, "selection() 无选区返回 nil")
 
--- 项目级命令覆盖：vim.g 优先
+-- tool_cmd vim.g 覆盖
 vim.g.ai_tool_cmd = { codex = 'codex -m "gpt-6-astra"' }
 check(require("herder-agents.config").tool_cmd("codex") == 'codex -m "gpt-6-astra"', "tool_cmd vim.g 覆盖")
+
+-- 自定义完整 lhs（不同前缀混用）与 table spec（mode 覆盖）
+plugin.setup({
+  keys = {
+    toggle = "<leader>ox",
+    input = "<leader>ie",
+    interrupt = { "<leader>xx", mode = { "n" } },
+  },
+})
+check(has_map(" ox", "n"), "自定义 toggle=<leader>ox 生效")
+check(has_map(" ie", "n"), "自定义 input=<leader>ie (n) 生效")
+check(has_map(" ie", "x"), "自定义 input=<leader>ie (x) 生效")
+check(has_map(" xx", "n"), "table spec interrupt (n) 生效")
+check(not has_map(" xx", "x"), "spec mode 覆盖后 interrupt 不注册 x")
+check(require("herder-agents.config").key_hint("toggle", "?") == "<leader>ox", "key_hint 反映自定义绑定")
 
 print("ALL PASSED")
