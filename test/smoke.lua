@@ -3,10 +3,6 @@
 vim.g.mapleader = " "
 
 local plugin = require("herder-agents")
-plugin.setup({
-  tools = { mycli = { title = " My CLI Chat " } },
-  keys = { select_session = false },
-})
 
 local function check(cond, msg)
   if not cond then
@@ -19,7 +15,32 @@ local function has_map(lhs, mode)
   return vim.fn.maparg(lhs, mode) ~= ""
 end
 
--- keymaps（leader = 空格，前缀 <leader>h）
+-- 默认 keys 为空：setup 后不绑定任何快捷键
+plugin.setup({
+  tools = { mycli = { title = " My CLI Chat " } },
+})
+check(not has_map(" ho", "n"), "默认不绑定 <leader>ho")
+check(not has_map(" he", "n"), "默认不绑定 <leader>he")
+check(not has_map(" hm", "n"), "默认不绑定 <leader>hm")
+
+-- 显式传入 keys 才注册
+plugin.setup({
+  tools = { mycli = { title = " My CLI Chat " } },
+  keys = {
+    toggle = "<leader>ho",
+    input = "<leader>he",
+    interrupt = "<leader>hx",
+    new_session = "<leader>hc",
+    history = "<leader>hh",
+    switch = "<leader>ht",
+    read_buffer = "<leader>hr",
+    add_buffer = "<leader>ha",
+    select_session = false,
+    switch_provider = "<leader>hy",
+    codex_model = "<leader>hm",
+  },
+})
+
 check(has_map(" ho", "n"), "<leader>ho (n) 已注册")
 check(has_map(" he", "n"), "<leader>he (n) 已注册")
 check(has_map(" he", "x"), "<leader>he (x) 已注册")
@@ -30,7 +51,7 @@ check(has_map(" ht", "n"), "<leader>ht 已注册")
 check(has_map(" hr", "n"), "<leader>hr 已注册")
 check(has_map(" ha", "n"), "<leader>ha 已注册")
 check(has_map(" hm", "n"), "<leader>hm 已注册")
-check(not has_map(" hs", "n"), "keys.select_session=false 时 <leader>hs 不注册")
+check(not has_map(" hs", "n"), "keys.select_session=false 时不注册")
 
 -- commands
 local cmds = vim.api.nvim_get_commands({})
@@ -73,6 +94,25 @@ plugin.current_session():drop_files(files.added)
 files = plugin.current_session():list_files()
 check(#files.added == 0, "drop_files 清空会话附件")
 
+-- 手动绑定所需的 API 均存在
+for _, fn in ipairs({
+  "toggle",
+  "input",
+  "interrupt",
+  "new_session",
+  "history",
+  "switch_tool",
+  "read_buffer",
+  "add_buffer",
+  "select_session",
+  "switch_provider",
+  "switch_codex_model",
+}) do
+  check(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")
+end
+plugin.read_buffer() -- herdr 后端无 read_buffer 时为 no-op
+plugin.add_buffer()
+
 -- send_prompt 对未注册工具
 check(plugin.send_prompt("nonexistent", "hi") == false, "send_prompt 未知工具返回 false")
 
@@ -83,9 +123,11 @@ check(true, "无 HERDR_ENV 时 toggle 不抛异常")
 -- context.selection 无选区时返回 nil
 check(require("herder-agents.context").selection() == nil, "selection() 无选区返回 nil")
 
--- tool_cmd vim.g 覆盖
+-- 项目级命令覆盖：vim.g 优先
 vim.g.ai_tool_cmd = { codex = 'codex -m "gpt-6-astra"' }
 check(require("herder-agents.config").tool_cmd("codex") == 'codex -m "gpt-6-astra"', "tool_cmd vim.g 覆盖")
+check(require("herder-agents.config").key_hint("toggle", "?") == "<leader>ho", "key_hint 反映已绑定键")
+check(require("herder-agents.config").key_hint("select_session", "?") == "?", "key_hint 未绑定返回 fallback")
 
 -- 自定义完整 lhs（不同前缀混用）与 table spec（mode 覆盖）
 plugin.setup({

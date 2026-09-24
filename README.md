@@ -38,9 +38,9 @@
 
 ## 快捷键
 
-默认绑定如下；每个功能在 `keys` 中独立配置**完整 lhs**，可任意混用前缀（单项置 `false` 关闭）：
+**默认不绑定任何快捷键**，由用户自己绑定。下表是推荐绑定（即原 LazyVim 配置里的一套），每个功能在 `keys` 中独立配置**完整 lhs**，可任意混用前缀：
 
-| 按键 | 模式 | 功能 | keys 字段 |
+| 推荐绑定 | 模式 | 功能 | keys 字段 |
 | --- | --- | --- | --- |
 | `<leader>ho` | n | 打开/关闭当前工具的 herdr pane；已存在时切换 pane zoom | `toggle` |
 | `<leader>he` | n | 打开 prompt 输入弹窗 | `input` |
@@ -54,6 +54,49 @@
 | `<leader>hs` | n/x | 恢复历史会话（agentic 后端） | `select_session` |
 | `<leader>hy` | n/x | 切换 provider/agent（agentic 后端） | `switch_provider` |
 | `<leader>hm` | n/x | 切换 codex 的 provider/model（`/quit` 后 `codex resume` 恢复会话） | `codex_model` |
+
+### 绑定方式一：setup 的 keys 配置项
+
+```lua
+require("herder-agents").setup({
+  keys = {
+    toggle = "<leader>ho",
+    input = "<leader>he",
+    interrupt = "<leader>hx",
+    new_session = "<leader>hc",
+    history = "<leader>hh",
+    switch = "<leader>ht",
+    read_buffer = "<leader>hr",
+    add_buffer = "<leader>ha",
+    switch_provider = "<leader>hy",
+    codex_model = "<leader>hm",
+  },
+})
+```
+
+### 绑定方式二：自行 vim.keymap.set 调 API
+
+```lua
+local ha = require("herder-agents")
+vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
+vim.keymap.set({ "n", "x" }, "<leader>he", function()
+  ha.input(vim.fn.mode():find("^[vV\22]") and require("herder-agents.context").selection() or nil)
+end, { desc = "AI Chat (prompt)" })
+```
+
+lazy.nvim 用户也可以用插件的 `keys` spec（此时 setup 照常执行，只是不传 keys 配置项）：
+
+```lua
+return {
+  "shaleix/herder-agents.nvim",
+  dependencies = { "MunifTanjim/nui.nvim" },
+  opts = {},
+  keys = {
+    { "<leader>ho", "<cmd>lua require('herder-agents').toggle()<cr>", desc = "Toggle AI" },
+    { "<leader>ht", "<cmd>lua require('herder-agents').switch_tool()<cr>", desc = "Switch AI tool" },
+  },
+}
+```
 
 prompt 弹窗内：
 
@@ -121,37 +164,25 @@ require("herder-agents").setup({
 
   agentic = true, -- 探测到 agentic 插件时自动注册后端
   commands = { toggle = "AIToggle", switch = "AISwitch" },
-  keys = {
-    toggle = "<leader>ho",
-    input = "<leader>he",
-    interrupt = "<leader>hx",
-    new_session = "<leader>hc",
-    history = "<leader>hh",
-    switch = "<leader>ht",
-    read_buffer = "<leader>hr",
-    add_buffer = "<leader>ha",
-    select_session = "<leader>hs",
-    switch_provider = "<leader>hy",
-    codex_model = "<leader>hm",
-  },
+  keys = {}, -- 默认不绑定任何快捷键；绑定方式见上「快捷键」一节
 })
 ```
 
-### 自定义快捷键
+### keys 配置项的值形式
 
-`keys` 的每个值支持三种形式，前缀可任意混用：
+`keys` 的每项独立配置完整 lhs，前缀可任意混用：
 
 ```lua
 require("herder-agents").setup({
   keys = {
-    toggle = "<leader>ox", -- string：完整 lhs，mode 用默认值
-    input = "<leader>ie", -- 不同前缀混用
+    toggle = "<leader>ox", -- string：完整 lhs，mode 用默认值（toggle 为 n）
+    input = "<leader>ie", -- 不同前缀混用（input 默认 n + x）
     interrupt = { -- table：完整 spec，可覆盖 mode / desc
       "<leader>xx",
       mode = { "n", "i" },
       desc = "Stop the agent",
     },
-    history = false, -- false：不注册，之后可用 API 自行 vim.keymap.set
+    history = false, -- false：不注册
   },
 })
 ```
@@ -168,6 +199,10 @@ ha.new_session()              -- 新会话
 ha.history()                  -- prompt 历史
 ha.switch_tool()              -- 选择器切换工具
 ha.switch_codex_model()       -- codex provider/model 切换
+ha.read_buffer()              -- 当前缓冲区加入只读上下文（herdr 后端为 no-op）
+ha.add_buffer()               -- 当前缓冲区加入可编辑上下文
+ha.select_session()           -- 恢复历史会话（agentic 后端）
+ha.switch_provider()          -- 切换 provider/agent（agentic 后端）
 ha.register_tool(name, def)   -- 注册外部后端（见下）
 ha.send_prompt(name, text)    -- 不经弹窗直接发送 prompt（回车提交）
 ha.current_session()          -- 文件附件会话（add_files / read_files / list_files / drop_files）

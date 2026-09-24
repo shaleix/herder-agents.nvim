@@ -71,23 +71,26 @@ M.defaults = {
     switch = "AISwitch",
   },
 
-  -- 快捷键：每个功能独立配置完整 lhs，可任意混用前缀（如 toggle 用 <leader>ox、
-  -- input 用 <leader>he）。值支持三种形式：
+  -- 快捷键：默认【不绑定任何快捷键】，由用户显式传入才注册。每项独立配置完整
+  -- lhs，可任意混用前缀（如 toggle 用 <leader>ox、input 用 <leader>he）。值支持：
   --   string  完整 lhs，如 "<leader>ho"（mode 用该功能的默认值）
   --   table   { "<leader>ai", mode = { "n", "i" }, desc = "自定义描述" }
-  --   false   关闭该映射（之后可用 API 自行 vim.keymap.set）
+  --   false   显式关闭（与不传等价）
+  -- 不想走本配置项的，也可以不传 keys，直接用 API 自行 vim.keymap.set（见 README）
   keys = {
-    toggle = "<leader>ho", -- 打开/关闭工具 pane（已存在时切换 zoom）；默认 n
-    input = "<leader>he", -- prompt 输入弹窗；默认 n + x（x 预填选区上下文）
-    interrupt = "<leader>hx", -- 中断当前工具；默认 n + x
-    new_session = "<leader>hc", -- 新会话；默认 n + x
-    history = "<leader>hh", -- prompt 历史；默认 n + x
-    switch = "<leader>ht", -- 切换工具；默认 n
-    read_buffer = "<leader>hr", -- 当前缓冲区加入只读上下文（非 herdr 后端）；默认 n + x
-    add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑上下文（非 herdr 后端）；默认 n + x
-    select_session = "<leader>hs", -- 恢复历史会话（agentic 后端）；默认 n + x
-    switch_provider = "<leader>hy", -- 切换 provider/agent（agentic 后端）；默认 n + x
-    codex_model = "<leader>hm", -- 切换 codex 的 provider/model；默认 n + x
+    -- toggle 的默认 mode 为 n；input 为 n + x（x 预填选区上下文）；
+    -- switch 为 n；其余均为 n + x
+    -- toggle = "<leader>ho",
+    -- input = "<leader>he",
+    -- interrupt = "<leader>hx",
+    -- new_session = "<leader>hc",
+    -- history = "<leader>hh",
+    -- switch = "<leader>ht",
+    -- read_buffer = "<leader>hr",
+    -- add_buffer = "<leader>ha",
+    -- select_session = "<leader>hs",
+    -- switch_provider = "<leader>hy",
+    -- codex_model = "<leader>hm",
   },
 }
 

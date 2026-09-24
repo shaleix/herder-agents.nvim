@@ -4,13 +4,9 @@
 -- AI 工具操作集：在 Herdr pane 中驱动 CLI 编码 agent（opencode / codex / qodercli /
 -- crush / omp / pi / hermes...），并支持通过 register_tool() 接入非 herdr 后端（如 agentic）。
 --
--- 默认快捷键（keys 配置项逐个可改，支持任意前缀混用，单项置 false 关闭）：
---   <leader>ho 打开/关闭工具 pane（已存在时切换 zoom）
---   <leader>he prompt 输入弹窗（visual 模式预填选区上下文）
---   <leader>hx 中断    <leader>hc 新会话    <leader>hh prompt 历史    <leader>ht 切换工具
---   <leader>hr/<leader>ha 当前缓冲区加入只读/可编辑上下文（非 herdr 后端）
---   <leader>hs 恢复会话 / <leader>hy 切换 provider（agentic 后端）
---   <leader>hm 切换 codex 的 provider/model
+-- 快捷键默认【不绑定】，两种绑定方式（见 README）：
+--   1. setup({ keys = { toggle = "<leader>ho", input = "<leader>he", ... } })
+--   2. 不传 keys，直接 vim.keymap.set 调下面的 API（M.toggle() / M.input() / ...）
 --
 -- 命令：:AIToggle [tool]（<leader>ho 的命令版，供 worktree_hook.sh 等外部脚本调用）
 --       :AISwitch [tool]（无参数时循环切换）
@@ -226,31 +222,19 @@ setup_keymaps = function()
   end, "Switch AI tool")
 
   map("read_buffer", { "n", "x" }, function()
-    local backend = tools.backend()
-    if backend and backend.read_buffer then
-      backend.read_buffer()
-    end
+    M.read_buffer()
   end, "AI read current buffer")
 
   map("add_buffer", { "n", "x" }, function()
-    local backend = tools.backend()
-    if backend and backend.add_buffer then
-      backend.add_buffer()
-    end
+    M.add_buffer()
   end, "AI add current buffer")
 
   map("select_session", { "n", "x" }, function()
-    local backend = tools.backend()
-    if backend and backend.select_session then
-      backend.select_session()
-    end
+    M.select_session()
   end, "AI select session")
 
   map("switch_provider", { "n", "x" }, function()
-    local backend = tools.backend()
-    if backend and backend.switch_provider then
-      backend.switch_provider()
-    end
+    M.switch_provider()
   end, "AI cycle agent")
 
   -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
@@ -331,6 +315,22 @@ function M.switch_provider()
   local backend = tools.backend()
   if backend and backend.switch_provider then
     backend.switch_provider()
+  end
+end
+
+-- 当前缓冲区加入只读上下文（herdr 后端无此概念时为 no-op）
+function M.read_buffer()
+  local backend = tools.backend()
+  if backend and backend.read_buffer then
+    backend.read_buffer()
+  end
+end
+
+-- 当前缓冲区加入可编辑上下文
+function M.add_buffer()
+  local backend = tools.backend()
+  if backend and backend.add_buffer then
+    backend.add_buffer()
   end
 end
 
