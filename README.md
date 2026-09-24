@@ -4,10 +4,11 @@ Drive CLI coding agents (opencode / codex / qodercli / crush / omp / pi / hermes
 running in [Herdr](https://github.com/mildwind/herdr) panes from inside Neovim,
 with a unified prompt input popup, history, interrupt, and new-session actions.
 
+Every tool is launched as a CLI command in a herdr split pane — there is no
+in-editor backend integration. The tool registry is configurable; adding a tool
+is one entry in `tools`.
+
 Extracted from a local LazyVim config (`lua/config/keymap_ai_tool.lua` + `lua/ai_tools/`).
-The tool registry is configurable and non-Herdr backends
-(e.g. [agentic](https://github.com/agentic-labs/agentic.nvim)) can be attached via
-`register_tool()`.
 
 ## Requirements
 
@@ -43,10 +44,8 @@ lhs in `keys`, so prefixes can be mixed freely:
 | `<leader>hc` | n/x | New session (`/clear` by default; `/new` for codex/opencode) | `new_session` |
 | `<leader>hh` | n/x | Prompt history (grouped by cwd), `<CR>` refills the input popup | `history` |
 | `<leader>ht` | n | Switch tool (fzf-lua / `vim.ui.select`) | `switch` |
-| `<leader>hr` | n/x | Add current buffer as read-only context (non-herdr backends) | `read_buffer` |
-| `<leader>ha` | n/x | Add current buffer as editable context (non-herdr backends) | `add_buffer` |
-| `<leader>hs` | n/x | Restore a past session (agentic backend) | `select_session` |
-| `<leader>hy` | n/x | Switch provider/agent (agentic backend) | `switch_provider` |
+| `<leader>hr` | n/x | Add current buffer as a read-only prompt attachment | `read_buffer` |
+| `<leader>ha` | n/x | Add current buffer as an editable prompt attachment | `add_buffer` |
 | `<leader>hm` | n/x | Switch codex provider/model (`/quit`, then `codex resume` restores the session) | `codex_model` |
 
 ### Option 1: the `keys` option of setup
@@ -62,7 +61,6 @@ require("herder-agents").setup({
     switch = "<leader>ht",
     read_buffer = "<leader>hr",
     add_buffer = "<leader>ha",
-    switch_provider = "<leader>hy",
     codex_model = "<leader>hm",
   },
 })
@@ -159,7 +157,6 @@ require("herder-agents").setup({
     },
   },
 
-  agentic = true, -- auto-register the backend when the agentic plugin is detected
   commands = { toggle = "AIToggle", switch = "AISwitch" },
   keys = {}, -- no keymaps by default; see the Keymaps section
 })
@@ -196,11 +193,8 @@ ha.new_session()              -- new session
 ha.history()                  -- prompt history
 ha.switch_tool()              -- switch tool via picker
 ha.switch_codex_model()       -- codex provider/model switch
-ha.read_buffer()              -- current buffer as read-only context (no-op for herdr backends)
-ha.add_buffer()               -- current buffer as editable context
-ha.select_session()           -- restore a past session (agentic backend)
-ha.switch_provider()          -- switch provider/agent (agentic backend)
-ha.register_tool(name, def)   -- register an external backend (see below)
+ha.read_buffer()              -- add current buffer as a read-only prompt attachment
+ha.add_buffer()               -- add current buffer as an editable prompt attachment
 ha.send_prompt(name, text)    -- send a prompt without the popup (submits with enter)
 ha.current_session()          -- file attachment session (add_files / read_files / list_files / drop_files)
 ha.api.add_current_buffer()   -- add current buffer as an editable attachment
@@ -219,30 +213,6 @@ require("herder-agents").send_prompt(vim.g.ai_tool, prompt)
 -- full-screen backdrop for floats (e.g. neogit)
 require("herder-agents.ui.common").dim(bufnr)
 ```
-
-### Registering a non-herdr backend (agentic example)
-
-The agentic plugin is auto-detected and registered when `agentic = true`. To register
-custom backends manually:
-
-```lua
-local ha = require("herder-agents")
-ha.register_tool("agentic", {
-  toggle = function() require("agentic").toggle() end,
-  input = function() require("agentic").open_prompt_float({ focus_prompt = true }) end,
-  history = function() require("agentic").open_prompt_history() end,
-  interrupt = function() require("agentic").stop_generation() end,
-  new = function() require("agentic").new_session() end,
-  select_session = function() require("agentic").restore_session() end,
-  switch_provider = function() require("agentic").switch_provider() end,
-  read_buffer = function()
-    require("agentic").add_files_to_context({ files = { vim.fn.expand("%:p") }, focus_prompt = false })
-  end,
-  add_buffer = function() require("agentic").add_file({ focus_prompt = false }) end,
-})
-```
-
-Registered backends automatically show up in the tool switcher and `:AISwitch` completion.
 
 ## Migrating from the old config
 

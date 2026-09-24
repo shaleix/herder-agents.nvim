@@ -18,8 +18,7 @@ M.defaults = {
   --   paste_wrap    发送文本用 bracketed paste 包裹（TUI 支持时开启，防多行被逐行提交）
   --   interrupt_key 中断按键（默认 ctrl+c）
   --   new_cmd       新会话命令（默认 /clear；codex/opencode 的会话重置命令是 /new）
-  tools = {
-    -- opencode: 与 omp 一样用 Esc 中断运行中的 agent；ctrl+c 只会清空输入框（双击则退出）
+  tools = { -- opencode: 与 omp 一样用 Esc 中断运行中的 agent；ctrl+c 只会清空输入框（双击则退出）
     opencode = { title = " OpenCode Chat ", paste_wrap = true, interrupt_key = "esc", new_cmd = "/new" },
     qodercli = { title = " Qoder CLI Chat ", paste_wrap = true },
     crush = { title = " Crush Chat " },
@@ -61,10 +60,6 @@ M.defaults = {
     },
   },
 
-  -- agentic 第三方插件适配：探测到 runtimepath 中存在 agentic 时自动注册后端；
-  -- 不想自动注册可置 false，或用 register_tool() 挂自定义后端
-  agentic = true,
-
   -- 用户命令名（置 false 关闭对应命令；:AIToggle 供 worktree_hook.sh 等外部脚本调用）
   commands = {
     toggle = "AIToggle",
@@ -86,10 +81,8 @@ M.defaults = {
     -- new_session = "<leader>hc",
     -- history = "<leader>hh",
     -- switch = "<leader>ht",
-    -- read_buffer = "<leader>hr",
-    -- add_buffer = "<leader>ha",
-    -- select_session = "<leader>hs",
-    -- switch_provider = "<leader>hy",
+    -- read_buffer = "<leader>hr", -- 当前缓冲区加入只读附件
+    -- add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑附件
     -- codex_model = "<leader>hm",
   },
 }

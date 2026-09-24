@@ -35,8 +35,6 @@ plugin.setup({
     switch = "<leader>ht",
     read_buffer = "<leader>hr",
     add_buffer = "<leader>ha",
-    select_session = false,
-    switch_provider = "<leader>hy",
     codex_model = "<leader>hm",
   },
 })
@@ -51,7 +49,8 @@ check(has_map(" ht", "n"), "<leader>ht 已注册")
 check(has_map(" hr", "n"), "<leader>hr 已注册")
 check(has_map(" ha", "n"), "<leader>ha 已注册")
 check(has_map(" hm", "n"), "<leader>hm 已注册")
-check(not has_map(" hs", "n"), "keys.select_session=false 时不注册")
+check(not has_map(" hs", "n"), "未传入的动作不注册")
+check(plugin.register_tool == nil, "外部后端注册机制已移除（herdr-only）")
 
 -- commands
 local cmds = vim.api.nvim_get_commands({})
@@ -72,18 +71,8 @@ check(vim.tbl_contains(names, "hermes"), "默认工具 hermes 已注册")
 -- 工具切换
 check(tools.set("codex"), "set codex 成功")
 check(vim.g.ai_tool == "codex", "vim.g.ai_tool 已切换")
+check(tools.backend() ~= nil, "backend() 返回 codex 后端")
 check(not tools.set("nonexistent"), "set 未知工具返回 false")
-
--- 外部后端注册
-local toggled = false
-plugin.register_tool("fake", {
-  toggle = function()
-    toggled = true
-  end,
-})
-tools.set("fake")
-plugin.toggle()
-check(toggled, "外部后端 register_tool 后 toggle 生效")
 check(tools.set("opencode"), "切回 opencode")
 
 -- api / 会话文件
@@ -104,14 +93,21 @@ for _, fn in ipairs({
   "switch_tool",
   "read_buffer",
   "add_buffer",
-  "select_session",
-  "switch_provider",
   "switch_codex_model",
 }) do
   check(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")
 end
-plugin.read_buffer() -- herdr 后端无 read_buffer 时为 no-op
+
+-- hr / ha：当前缓冲区加入附件会话
+vim.api.nvim_buf_set_name(0, "/tmp/herder-agents-smoke2.lua")
 plugin.add_buffer()
+files = plugin.current_session():list_files()
+check(#files.added == 1, "add_buffer 把当前缓冲区加入可编辑附件")
+plugin.current_session():clear_files()
+plugin.read_buffer()
+files = plugin.current_session():list_files()
+check(#files.readonly == 1, "read_buffer 把当前缓冲区加入只读附件")
+plugin.current_session():clear_files()
 
 -- send_prompt 对未注册工具
 check(plugin.send_prompt("nonexistent", "hi") == false, "send_prompt 未知工具返回 false")
@@ -127,7 +123,7 @@ check(require("herder-agents.context").selection() == nil, "selection() 无选�
 vim.g.ai_tool_cmd = { codex = 'codex -m "gpt-6-astra"' }
 check(require("herder-agents.config").tool_cmd("codex") == 'codex -m "gpt-6-astra"', "tool_cmd vim.g 覆盖")
 check(require("herder-agents.config").key_hint("toggle", "?") == "<leader>ho", "key_hint 反映已绑定键")
-check(require("herder-agents.config").key_hint("select_session", "?") == "?", "key_hint 未绑定返回 fallback")
+check(require("herder-agents.config").key_hint("nonexistent", "?") == "?", "key_hint 未绑定返回 fallback")
 
 -- 自定义完整 lhs（不同前缀混用）与 table spec（mode 覆盖）
 plugin.setup({

@@ -1,14 +1,15 @@
 -- herder-agents.nvim
 --
--- 从本地 LazyVim 配置（lua/config/keymap_ai_tool.lua + lua/ai_tools/）抽象出的
--- AI 工具操作集：在 Herdr pane 中驱动 CLI 编码 agent（opencode / codex / qodercli /
--- crush / omp / pi / hermes...），并支持通过 register_tool() 接入非 herdr 后端（如 agentic）。
+-- 在 Neovim 中驱动跑在 Herdr pane 里的 CLI 编码 agent
+-- （opencode / codex / qodercli / crush / omp / pi / hermes ...），
+-- 提供统一的 prompt 输入弹窗、历史、中断、新会话等操作。
+-- 工具一律以 CLI 命令形式在 herdr 分屏 pane 中启动，无编辑器内后端集成。
 --
 -- 快捷键默认【不绑定】，两种绑定方式（见 README）：
 --   1. setup({ keys = { toggle = "<leader>ho", input = "<leader>he", ... } })
---   2. 不传 keys，直接 vim.keymap.set 调下面的 API（M.toggle() / M.input() / ...）
+--   2. 不传 keys，直接 vim.keymap.set 调 API（M.toggle() / M.input() / ...）
 --
--- 命令：:AIToggle [tool]（<leader>ho 的命令版，供 worktree_hook.sh 等外部脚本调用）
+-- 命令：:AIToggle [tool]（toggle 的命令版，供 worktree_hook.sh 等外部脚本调用）
 --       :AISwitch [tool]（无参数时循环切换）
 local M = {}
 
@@ -16,7 +17,6 @@ local config = require("herder-agents.config")
 local tools = require("herder-agents.tools")
 
 -- 前向声明（定义见文件后方，setup 引用）
-local register_agentic
 local setup_commands
 local setup_keymaps
 
@@ -31,82 +31,8 @@ function M.setup(opts)
 
   require("herder-agents.ui.common").setup_highlights()
   tools.register_herdr_tools()
-  register_agentic()
   setup_commands()
   setup_keymaps()
-end
-
--- ---------------------------------------------------------------------------
--- agentic 第三方插件适配：探测 runtimepath 中存在 agentic 模块时才注册，
--- 避免切换到不可用的工具；安装后自动恢复行为
--- ---------------------------------------------------------------------------
-
-local dim_agentic_prompt_float -- 前向声明，agentic.input 引用
-
-local function has_agentic()
-  return #vim.api.nvim_get_runtime_file("lua/agentic/init.lua", false) > 0
-    or #vim.api.nvim_get_runtime_file("lua/agentic.lua", false) > 0
-end
-
-register_agentic = function()
-  if not config.options.agentic or not has_agentic() then
-    return
-  end
-  tools.register_tool("agentic", {
-    toggle = function()
-      require("agentic").toggle()
-    end,
-    input = function()
-      require("agentic").open_prompt_float({ focus_prompt = true })
-      vim.schedule(dim_agentic_prompt_float)
-    end,
-    history = function()
-      require("agentic").open_prompt_history()
-    end,
-    interrupt = function()
-      require("agentic").stop_generation()
-    end,
-    new = function()
-      require("agentic").new_session()
-    end,
-    select_session = function()
-      require("agentic").restore_session()
-    end,
-    switch_provider = function()
-      require("agentic").switch_provider()
-    end,
-    read_buffer = function()
-      require("agentic").add_files_to_context({ files = { vim.fn.expand("%:p") }, focus_prompt = false })
-    end,
-    add_buffer = function()
-      require("agentic").add_file({ focus_prompt = false })
-    end,
-  })
-end
-
--- agentic 的 prompt float 是独立实现，没有遮罩；
--- 复用通用的 common.dim，并把遮罩生命周期绑到 float 窗口关闭上
-dim_agentic_prompt_float = function()
-  local ok, SessionRegistry = pcall(require, "agentic.session_registry")
-  if not ok then
-    return
-  end
-  SessionRegistry.get_session_for_tab_page(nil, function(session)
-    local prompt_float = session.widget and session.widget.prompt_float
-    local winid = prompt_float and prompt_float:get_input_winid()
-    if not winid then
-      return
-    end
-    local close_dim = require("herder-agents.ui.common").dim(prompt_float.buf_nrs.input)
-    -- input buffer 与主 widget 共享，buffer 事件可能不触发，改绑窗口关闭
-    vim.api.nvim_create_autocmd("WinClosed", {
-      pattern = tostring(winid),
-      once = true,
-      callback = function()
-        close_dim()
-      end,
-    })
-  end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -229,14 +155,6 @@ setup_keymaps = function()
     M.add_buffer()
   end, "AI add current buffer")
 
-  map("select_session", { "n", "x" }, function()
-    M.select_session()
-  end, "AI select session")
-
-  map("switch_provider", { "n", "x" }, function()
-    M.switch_provider()
-  end, "AI cycle agent")
-
   -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
   -- 用 codex resume <session> -m <model> -c model_provider=<provider> 重启
   map("codex_model", { "n", "x" }, function()
@@ -304,36 +222,6 @@ function M.switch_tool()
   end)
 end
 
-function M.select_session()
-  local backend = tools.backend()
-  if backend and backend.select_session then
-    backend.select_session()
-  end
-end
-
-function M.switch_provider()
-  local backend = tools.backend()
-  if backend and backend.switch_provider then
-    backend.switch_provider()
-  end
-end
-
--- 当前缓冲区加入只读上下文（herdr 后端无此概念时为 no-op）
-function M.read_buffer()
-  local backend = tools.backend()
-  if backend and backend.read_buffer then
-    backend.read_buffer()
-  end
-end
-
--- 当前缓冲区加入可编辑上下文
-function M.add_buffer()
-  local backend = tools.backend()
-  if backend and backend.add_buffer then
-    backend.add_buffer()
-  end
-end
-
 function M.switch_codex_model()
   if tools.current_name() ~= "codex" then
     require("herder-agents.utils").warn("Switch model 仅支持 codex（当前: " .. tools.current_name() .. "）")
@@ -342,8 +230,45 @@ function M.switch_codex_model()
   require("herder-agents.codex_model").switch()
 end
 
-M.register_tool = tools.register_tool
-M.api = tools.api
+-- ---------------------------------------------------------------------------
+-- 文件附件（<leader>hr / <leader>ha）
+-- 与 prompt 弹窗顶部文件树、fzf-lua ctrl-h 共用同一会话；
+-- 提交时未在草稿中 @提及 的附件以 "Relate file:" 块附加
+-- ---------------------------------------------------------------------------
+
+M.api = {}
+
+function M.api.add_current_buffer()
+  if vim.bo.buftype == "" then
+    local buffer_path = vim.fn.expand("%:p")
+    require("herder-agents.sessions").current_session():add_files({ buffer_path })
+  end
+end
+
+function M.api.read_current_buffer()
+  if vim.bo.buftype == "" then
+    local buffer_path = vim.fn.expand("%:p")
+    require("herder-agents.sessions").current_session():read_files({ buffer_path })
+  end
+end
+
+function M.api.add_file(path)
+  require("herder-agents.sessions").current_session():add_files({ path })
+  vim.notify("Added file: " .. path, vim.log.levels.INFO)
+end
+
+function M.api.read_file(path)
+  require("herder-agents.sessions").current_session():read_files({ path })
+  vim.notify("Read file: " .. path, vim.log.levels.INFO)
+end
+
+function M.read_buffer()
+  M.api.read_current_buffer()
+end
+
+function M.add_buffer()
+  M.api.add_current_buffer()
+end
 
 -- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交
 --（fzf-lua 诊断修复等外部调用方使用）
