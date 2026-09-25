@@ -164,6 +164,11 @@ function M.show()
 
   local function close()
     popup:unmount()
+    -- 提交/取消可能发生在插入模式（Extra Prompt 行键入后直接 C-s/C-Enter/Esc）：
+    -- 卸载后焦点回源窗口但插入模式会残留，显式退回 normal，避免误改代码
+    if vim.api.nvim_get_mode().mode:match("^[iR]") then
+      vim.cmd("stopinsert")
+    end
   end
 
   -- 提交：with_enter=true 直接发送；false 仅追加到 agent 输入框（不按回车）

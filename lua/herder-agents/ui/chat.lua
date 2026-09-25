@@ -615,6 +615,11 @@ local function add_note_inline(range)
   local function close()
     cleanup()
     popup:unmount()
+    -- i-mode 映射（C-s/C-Enter/Esc）直接关闭时，浮窗卸载后焦点回到源窗口，
+    -- 但插入模式会残留 —— 显式退回 normal，避免后续键入误改代码
+    if vim.api.nvim_get_mode().mode:match("^[iR]") then
+      vim.cmd("stopinsert")
+    end
   end
 
   local function save()
