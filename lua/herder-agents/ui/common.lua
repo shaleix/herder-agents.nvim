@@ -9,6 +9,13 @@ M.setup_highlights = function()
     AiderFolder = { link = "Directory" },
     AiderPromptTitle = { link = "FloatTitle" },
     AiderComment = { link = "Comment" },
+    -- 备注（notes）：侧栏 sign、行尾虚拟文本预览，以及 Chat 树里的勾选框/位置/内容
+    HerderNoteSign = { link = "DiagnosticSignInfo" },
+    HerderNoteVirt = { link = "Comment" },
+    HerderNoteChecked = { link = "String" },
+    HerderNoteUnchecked = { link = "LineNr" },
+    HerderNoteLoc = { link = "Directory" },
+    HerderNoteText = { link = "Normal" },
   }
   for name, def in pairs(defs) do
     vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))

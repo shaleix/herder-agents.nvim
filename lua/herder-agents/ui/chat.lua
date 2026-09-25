@@ -7,6 +7,7 @@
 local M = {}
 local common = require("herder-agents.ui.common")
 local sessions = require("herder-agents.sessions")
+local notes = require("herder-agents.notes")
 local utils = require("herder-agents.utils")
 local config = require("herder-agents.config")
 
@@ -515,6 +516,112 @@ function M.show_input(default_value)
   setup_file_tree(content_popup, prompt_popup, layout, session)
 end
 
+-- 备注位置标签："rel:行" 或 "rel:起-止"
+local function note_loc_label(range)
+  if range.start_line == range.end_line then
+    return string.format("%s:%d", range.rel, range.start_line)
+  end
+  return string.format("%s:%d-%d", range.rel, range.start_line, range.end_line)
+end
+
+-- 备注输入弹窗：锚定在当前窗口的光标附近（优先光标行下方，空间不足翻到上方）。
+-- 内联样式：细线条边框（原生 single）+ 背景与 buffer 一致（NormalFloat→Normal），
+-- 标题与按键提示直接渲染在边框线上，无全屏遮罩，输入时可对照代码；
+-- 保存后写入会话备注并在源缓冲区渲染 extmark（侧栏 sign + 行尾预览）
+local function add_note_popup(range)
+  local Popup = require("nui.popup")
+  local loc = note_loc_label(range)
+
+  local win = vim.api.nvim_get_current_win()
+  local win_width = vim.api.nvim_win_get_width(win)
+  local win_height = vim.api.nvim_win_get_height(win)
+  -- 原生边框左右各占 1 列，宽度留出余量
+  local width = math.max(20, math.min(common.clamp_popup_width(60), win_width - 4))
+  local height = 3
+  local total = height + 2 -- 顶部（标题）与底部（按键提示）边框各占一行
+
+  -- 弹窗在窗口内的位置（0-based，position 指内容区，边框在四周各外扩 1 行/列）：
+  -- 优先边框顶部贴着光标行下方（不遮挡标注行）；下方放不下时翻到光标上方
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local row_in_win = cursor[1] - vim.fn.line("w0", win)
+  local row
+  if row_in_win + total < win_height then
+    row = row_in_win + 2
+  else
+    row = math.max(0, row_in_win - total + 1)
+  end
+  -- 内容列：给左侧边框留 1 列，右缘不超出窗口
+  local col_in_win = vim.fn.wincol() - 1
+  local col = math.max(1, math.min(col_in_win, win_width - width - 2))
+
+  local popup = Popup({
+    relative = "win",
+    position = { row = row, col = col },
+    size = { width = width, height = height },
+    enter = true,
+    border = { style = "single" }, -- 无 text/padding → nui 走原生边框（单窗口）
+    buf_options = { filetype = "aider-input" },
+    win_options = {
+      -- 背景与 buffer 一致；边框/标题用 Comment 灰，弱化"弹出框"感
+      winhighlight = "NormalFloat:Normal,FloatBorder:Comment,FloatTitle:Comment",
+    },
+  })
+
+  -- 原生 title/footer：渲染在上/下边框线（nvim 0.9+），mount 前注入 win_config
+  popup.win_config.title = { { " Note @ " .. loc .. " ", "FloatTitle" } }
+  popup.win_config.title_pos = "left"
+  popup.win_config.footer = { { " C-s/C-Enter: save · q/Esc: cancel ", "FloatTitle" } }
+  popup.win_config.footer_pos = "right"
+
+  local function close()
+    popup:unmount()
+  end
+
+  local function save()
+    local lines = vim.api.nvim_buf_get_lines(popup.bufnr, 0, -1, false)
+    local text = vim.trim(table.concat(lines, "\n"))
+    if text == "" then
+      utils.warn("Note is empty, skip")
+      return
+    end
+    notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
+    close()
+    utils.info("Note added @ " .. loc)
+  end
+
+  popup:map("n", "q", close, mapOpts)
+  popup:map("n", "<Esc>", close, mapOpts)
+  popup:map("n", "<C-q>", close, mapOpts)
+  popup:map("i", "<C-q>", close, mapOpts)
+  popup:map("n", "<C-Enter>", save, mapOpts)
+  popup:map("i", "<C-Enter>", function()
+    vim.api.nvim_input("<C-[>")
+    save()
+  end, mapOpts)
+  popup:map("n", "<C-s>", save, mapOpts)
+  popup:map("i", "<C-s>", function()
+    vim.api.nvim_input("<C-[>")
+    save()
+  end, mapOpts)
+
+  popup:mount()
+  -- 进入插入模式：排入原始 "i"（no-remap），回调返回后被主循环处理并停留在插入模式。
+  -- 两个要点（都踩过坑）：
+  --   1. 不能喂 "<Esc>"：普通模式触发时（最常见路径），排队的 <Esc> 会命中本窗
+  --      n 模式 <Esc>=close 映射，弹窗刚弹出即被关闭；
+  --   2. 无需清可视模式：mount(enter=true) 切换窗口时 nvim 已自动退出可视模式
+  vim.api.nvim_feedkeys("i", "m", false)
+end
+
+-- 公开入口：在指定位置添加备注（init.M.add_note 调用，range 见 context.note_range）
+function M.add_note(range)
+  if not range then
+    utils.warn("No location to annotate")
+    return
+  end
+  add_note_popup(range)
+end
+
 local function session_files()
   local session = sessions.current_session()
   local files_data = session:list_files()
@@ -762,6 +869,22 @@ function M.send_tool_prompt(name, text)
   end
   herdr_cli_send_prompt(pane.pane_id, tool, text)
   herdr_cli("pane", "send-keys", pane.pane_id, "enter")
+  return true
+end
+
+-- 只把文本追加到指定工具 pane 的 agent 输入框，【不按回车】：
+-- 内容停留在 TUI 输入框中，用户可继续编辑后手动提交（notes_view 的 <C-a> 使用）
+function M.append_tool_prompt(name, text)
+  local tool = config.options.tools[name]
+  if not tool then
+    utils.err(name .. " is not a herdr CLI tool")
+    return false
+  end
+  local pane = cli_pane(name)
+  if not pane then
+    return false
+  end
+  herdr_cli_send_prompt(pane.pane_id, tool, text)
   return true
 end
 

@@ -46,6 +46,15 @@ M.defaults = {
   icons = {
     folder = "",
     collapse_marks = { "", "" },
+    -- 备注在源缓冲区侧栏的 sign 图标（✎ U+270E，用字节转义避免编辑时丢失字形）；
+    -- 置空字符串则不显示 sign，仅保留行尾虚拟文本预览。可换成任意 Nerd Font 图标
+    note = "\226\156\142",
+  },
+
+  -- Buffer 备注（<leader>hn 在光标行 / 可视选区添加，Chat 弹窗勾选后随 prompt 发送）
+  notes = {
+    -- 行尾虚拟文本预览的最大显示宽度（字符数，超出截断为 …）
+    preview_width = 40,
   },
 
   -- codex provider/model 切换（<leader>hm）
@@ -83,6 +92,8 @@ M.defaults = {
     -- switch = "<leader>ht",
     -- read_buffer = "<leader>hr", -- 当前缓冲区加入只读附件
     -- add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑附件
+    -- note = "<leader>hn", -- 在光标行 / 可视选区添加备注
+    -- notes_view = "<leader>hN", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
     -- codex_model = "<leader>hm",
   },
 }

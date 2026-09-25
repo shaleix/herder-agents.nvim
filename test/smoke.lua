@@ -35,6 +35,8 @@ plugin.setup({
     switch = "<leader>ht",
     read_buffer = "<leader>hr",
     add_buffer = "<leader>ha",
+    note = "<leader>hn",
+    notes_view = "<leader>hN",
     codex_model = "<leader>hm",
   },
 })
@@ -48,6 +50,9 @@ check(has_map(" hh", "n"), "<leader>hh 已注册")
 check(has_map(" ht", "n"), "<leader>ht 已注册")
 check(has_map(" hr", "n"), "<leader>hr 已注册")
 check(has_map(" ha", "n"), "<leader>ha 已注册")
+check(has_map(" hn", "n"), "<leader>hn (n) 已注册")
+check(has_map(" hn", "x"), "<leader>hn (x) 已注册")
+check(has_map(" hN", "n"), "<leader>hN (n) 已注册")
 check(has_map(" hm", "n"), "<leader>hm 已注册")
 check(not has_map(" hs", "n"), "未传入的动作不注册")
 check(plugin.register_tool == nil, "外部后端注册机制已移除（herdr-only）")
@@ -93,6 +98,8 @@ for _, fn in ipairs({
   "switch_tool",
   "read_buffer",
   "add_buffer",
+  "add_note",
+  "notes_view",
   "switch_codex_model",
 }) do
   check(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")
@@ -108,6 +115,57 @@ plugin.read_buffer()
 files = plugin.current_session():list_files()
 check(#files.readonly == 1, "read_buffer 把当前缓冲区加入只读附件")
 plugin.current_session():clear_files()
+
+-- 备注（notes）：会话 store、勾选态、extmark、格式化、note_range
+local notes = require("herder-agents.notes")
+local context = require("herder-agents.context")
+notes.clear()
+vim.api.nvim_buf_set_name(0, "/tmp/herder-agents-notes.lua")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c", "d", "e", "f" })
+local n1 = notes.add("/tmp/herder-agents-notes.lua", 2, 2, "first note")
+local n2 = notes.add("/tmp/herder-agents-notes.lua", 4, 6, "second\nnote")
+check(#notes.list() == 2, "notes.add 存入两条备注")
+check(n1.checked == true, "新建备注默认勾选")
+check(#notes.checked() == 2, "两条备注默认都勾选")
+check(n1.extmark_id ~= nil, "备注在已加载缓冲区渲染 extmark")
+notes.toggle(n1.id)
+check(n1.checked == false, "toggle 取消勾选")
+check(#notes.checked() == 1, "取消勾选后只剩一条勾选")
+local ordered = notes.list()
+check(ordered[1].id == n1.id and ordered[2].id == n2.id, "list() 按起始行排序")
+-- notes_block：只含勾选备注，多行压成单行，含位置
+local block = context.notes_block(notes.checked())
+check(block ~= nil and block:match("^Notes:") ~= nil, "notes_block 以 Notes: 开头")
+check(block:find("(lines 4-6)", 1, true) ~= nil, "notes_block 含多行位置")
+check(block:find("second note", 1, true) ~= nil, "notes_block 多行内容压成单行")
+check(block:find("first note", 1, true) == nil, "notes_block 不含未勾选备注")
+notes.sync_positions()
+check(n2.start_line == 4 and n2.end_line == 6, "sync_positions 无编辑时保持行号")
+notes.check_all()
+check(n1.checked == true and #notes.checked() == 2, "check_all 全部勾选")
+notes.remove(n1.id)
+check(#notes.list() == 1, "remove 后剩一条备注")
+notes.clear()
+check(#notes.list() == 0, "clear 清空全部备注")
+check(context.notes_block(notes.checked()) == nil, "notes_block 空列表返回 nil")
+-- note_range：普通模式取光标单行
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+local range = context.note_range()
+check(range ~= nil and range.start_line == 3 and range.end_line == 3, "note_range 普通模式取光标单行")
+check(range.path == "/tmp/herder-agents-notes.lua", "note_range 返回缓冲区路径")
+-- api.add_note 编程入口
+local n3 = plugin.api.add_note("/tmp/herder-agents-notes.lua", 1, 1, "via api")
+check(n3 ~= nil and #notes.list() == 1, "api.add_note 存入备注")
+notes.clear()
+
+-- extmark 跟随编辑：上方插入一行后 sync_positions 应读回移动后的新行号
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c", "d", "e", "f" })
+local nt = notes.add("/tmp/herder-agents-notes.lua", 3, 4, "track me")
+check(nt.start_line == 3 and nt.end_line == 4, "备注初始行号 3-4")
+vim.api.nvim_buf_set_lines(0, 0, 0, false, { "NEW" }) -- 顶部插入一行
+notes.sync_positions()
+check(nt.start_line == 4 and nt.end_line == 5, "上方插入行后 extmark 跟随到 4-5")
+notes.clear()
 
 -- send_prompt 对未注册工具
 check(plugin.send_prompt("nonexistent", "hi") == false, "send_prompt 未知工具返回 false")

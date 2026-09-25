@@ -26,6 +26,8 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       switch = "<leader>ht",
       read_buffer = "<leader>hr",
       add_buffer = "<leader>ha",
+      note = "<leader>hn",
+      notes_view = "<leader>hN",
       codex_model = "<leader>hm",
     },
   },
@@ -52,10 +54,42 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hh` | prompt history |
 | `<leader>ht` | switch tool |
 | `<leader>hr` / `<leader>ha` | add current buffer as read-only / editable attachment |
+| `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
+| `<leader>hN` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hm` | switch codex provider/model (codex only) |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 `Ctrl+t` insert symbol path · `Ctrl+d` insert diagnostics · `dd`/`D` drop/clear attachments.
+
+## Notes
+
+Annotate code inline, then review and send the annotations from a dedicated popup.
+
+- `<leader>hn` in normal mode notes the cursor line; in visual mode it notes the
+  selected line range. A small input box pops up right below the cursor (it flips
+  above near the window bottom, and the code stays visible while you type);
+  `Ctrl+Enter`/`Ctrl+s` saves, `q`/`Esc` cancels.
+- Each note is marked in the source buffer with a gutter sign (`✎`) and an
+  end-of-line preview. Markers follow the code as you edit (extmark-based), so the
+  note stays anchored to the right lines.
+- `<leader>hN` opens the **notes popup** (independent of the chat popup): all notes
+  listed and **checked by default**, with an `Extra Prompt: - ` line at the bottom
+  (same buffer) for an extra instruction to send along with the notes.
+  `<Space>`/`x` toggles a note · `dd` deletes it · `q`/`Esc` closes.
+- Two ways to submit:
+  - `<CR>` — **send now**: text goes to the agent pane followed by Enter.
+  - `<C-a>` — **append only**: the same text lands in the agent's input box
+    *without* Enter, so you can keep editing there and submit manually.
+- Submitted text (extra prompt becomes a final `- ` bullet):
+
+  ```
+  Notes:
+  - @src/foo.lua (line 70): handle the nil case
+  - @src/foo.lua (lines 10-20): check the edge cases
+  - <extra prompt>
+  ```
+
+- Notes are session-scoped (in memory, like file attachments) and cleared on restart.
 
 ## Commands
 
@@ -75,6 +109,8 @@ opts = {
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
   codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
+  icons = { note = "✎" }, -- gutter sign for notes ("" disables the sign)
+  notes = { preview_width = 40 }, -- end-of-line note preview width
 }
 ```
 
@@ -82,6 +118,10 @@ opts = {
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
-`switch_codex_model()`, `send_prompt(tool, text)` (submit without the popup),
+`add_note()`, `notes_view()`, `switch_codex_model()`, `send_prompt(tool, text)` (submit without the popup),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
+`require("herder-agents.notes")` is the session note store (`add` / `list` / `checked` /
+`toggle` / `remove` / `clear`).
+`require("herder-agents.ui.chat").append_tool_prompt(tool, text)` puts text into the
+agent's input box without pressing Enter.
 `require("herder-agents.ui.common").dim(bufnr)` provides the float backdrop.

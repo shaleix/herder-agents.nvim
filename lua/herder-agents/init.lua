@@ -155,6 +155,16 @@ setup_keymaps = function()
     M.add_buffer()
   end, "AI add current buffer")
 
+  -- 备注：普通模式取光标行，可视模式取选区行范围
+  map("note", { "n", "x" }, function()
+    M.add_note()
+  end, "AI add note at cursor/selection")
+
+  -- Notes 审阅/提交弹窗
+  map("notes_view", { "n", "x" }, function()
+    M.notes_view()
+  end, "AI notes view (review & send)")
+
   -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
   -- 用 codex resume <session> -m <model> -c model_provider=<provider> 重启
   map("codex_model", { "n", "x" }, function()
@@ -262,12 +272,40 @@ function M.api.read_file(path)
   vim.notify("Read file: " .. path, vim.log.levels.INFO)
 end
 
+-- 以编程方式添加备注（供外部脚本 / 测试使用）
+function M.api.add_note(path, start_line, end_line, text)
+  return require("herder-agents.notes").add(path, start_line, end_line, text)
+end
+
 function M.read_buffer()
   M.api.read_current_buffer()
 end
 
 function M.add_buffer()
   M.api.add_current_buffer()
+end
+
+-- 在当前缓冲区添加备注（普通模式=光标行，可视模式=选区行范围）：
+-- 弹出输入框录入文本，保存进会话备注，并在源缓冲区用 extmark 标记；
+-- 备注会显示在 Chat 弹窗 "Relate file" 下方的 "Notes" 区，勾选后随 prompt 发送
+function M.add_note()
+  if vim.bo.buftype ~= "" then
+    require("herder-agents.utils").warn("Cannot annotate a special buffer")
+    return
+  end
+  local range = require("herder-agents.context").note_range()
+  if not range then
+    require("herder-agents.utils").warn("No file to annotate")
+    return
+  end
+  require("herder-agents.ui.chat").add_note(range)
+end
+
+-- Notes 审阅/提交弹窗（独立于 Chat）：默认全选，可勾选/删除，
+-- 底部 Extra Prompt 随勾选备注一同发送；
+-- <CR> 直接发送（带回车），<C-a> 仅追加到 agent 输入框（不带回车）
+function M.notes_view()
+  require("herder-agents.ui.notes_view").show()
 end
 
 -- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交

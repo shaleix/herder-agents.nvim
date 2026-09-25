@@ -66,6 +66,57 @@ function M.files_block(files)
   return table.concat(lines, "\n")
 end
 
+-- 勾选的备注 → "Notes:" 块；空列表返回 nil
+-- 每条格式：`- @相对路径 (line N): 内容` 或 `(lines A-B): 内容`（多行内容压成单行）
+function M.notes_block(note_list)
+  if not note_list or #note_list == 0 then
+    return nil
+  end
+  local lines = { "Notes:" }
+  for _, note in ipairs(note_list) do
+    local loc
+    if note.start_line == note.end_line then
+      loc = string.format("(line %d)", note.start_line)
+    else
+      loc = string.format("(lines %d-%d)", note.start_line, note.end_line)
+    end
+    local text = (note.text or ""):gsub("\r?\n", " "):gsub("^%s*(.-)%s*$", "%1")
+    table.insert(lines, string.format("- @%s %s: %s", note.rel, loc, text))
+  end
+  return table.concat(lines, "\n")
+end
+
+-- 当前备注位置：可视模式取选区起止行，普通模式取光标行；
+-- 无名缓冲区返回 nil。返回 { path, rel, bufnr, start_line, end_line }
+-- 选区行号沿用 selection() 的 '< '> mark 方式，与本插件既有行为一致
+function M.note_range()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" then
+    return nil
+  end
+  local start_line, end_line
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:match("[vV\22]") then
+    local s = vim.fn.getpos("'<")[2]
+    local e = vim.fn.getpos("'>")[2]
+    if s >= 1 and e >= 1 then
+      start_line, end_line = math.min(s, e), math.max(s, e)
+    end
+  end
+  if not start_line then
+    local cur = vim.api.nvim_win_get_cursor(0)[1]
+    start_line, end_line = cur, cur
+  end
+  return {
+    path = path,
+    rel = require("herder-agents.utils").get_relative_path(path),
+    bufnr = bufnr,
+    start_line = start_line,
+    end_line = end_line,
+  }
+end
+
 -- 缓冲区诊断块；无诊断或无名缓冲区返回 nil
 function M.diagnostics(bufnr)
   local path = vim.api.nvim_buf_get_name(bufnr)
