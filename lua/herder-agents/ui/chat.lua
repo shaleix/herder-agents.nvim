@@ -542,7 +542,12 @@ local function add_note_inline(range)
   local src_win = vim.api.nvim_get_current_win()
   local src_buf = range.bufnr
   local anchor_line = range.end_line
-  local win_width = vim.api.nvim_win_get_width(src_win)
+  -- nvim_win_get_width 是窗口总宽【含 sign/number(statuscolumn) 的 textoff】！
+  -- 浮窗必须按文本区宽度定尺寸：bufpos 锚在文本第 0 列，若外框宽超过文本区，
+  -- 右侧越界会触发 nvim 把浮窗整体左移（顶到窗口第 0 列、盖住行号列）
+  local win_info = vim.fn.getwininfo(src_win)[1] or {}
+  local textoff = win_info.textoff or 0
+  local text_width = math.max(24, vim.api.nvim_win_get_width(src_win) - textoff)
   local win_height = vim.api.nvim_win_get_height(src_win)
 
   -- 锚点行下方可见空间不足时，滚动窗口腾出缝隙高度
@@ -583,7 +588,7 @@ local function add_note_inline(range)
   local popup = Popup({
     relative = { type = "buf", position = { row = anchor_line - 1, col = 0 } },
     position = { row = 1, col = 0 },
-    size = { width = math.max(20, win_width - 2), height = NOTE_INPUT_ROWS },
+    size = { width = math.max(20, text_width - 2), height = NOTE_INPUT_ROWS },
     enter = true,
     border = { style = "single" }, -- 无 text/padding → nui 原生边框（单窗口）
     buf_options = { filetype = "aider-input" },
