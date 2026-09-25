@@ -66,9 +66,12 @@ In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 Annotate code inline, then review and send the annotations from a dedicated popup.
 
 - `<leader>hn` in normal mode notes the cursor line; in visual mode it notes the
-  selected line range. A small input box pops up right below the cursor (it flips
-  above near the window bottom, and the code stays visible while you type);
-  `Ctrl+Enter`/`Ctrl+s` saves, `q`/`Esc` cancels.
+  selected line range. An **inline input box** opens right below that line: the
+  following content is pushed down by virtual lines (no line numbers, the buffer
+  is never modified) and you type in place, right where you are looking. The thin
+  border shows a `✎ note` title (top-left) and the key hints (bottom-right), with
+  its left edge aligned to the code. `Ctrl+Enter`/`Ctrl+s` saves, `Esc`/`q`
+  cancels; the gap collapses either way.
 - Each note is marked in the source buffer with a gutter sign (`✎`) and an
   end-of-line preview. Markers follow the code as you edit (extmark-based), so the
   note stays anchored to the right lines.

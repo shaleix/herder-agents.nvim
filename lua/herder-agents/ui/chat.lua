@@ -524,56 +524,91 @@ local function note_loc_label(range)
   return string.format("%s:%d-%d", range.rel, range.start_line, range.end_line)
 end
 
--- 备注输入弹窗：锚定在当前窗口的光标附近（优先光标行下方，空间不足翻到上方）。
--- 内联样式：细线条边框（原生 single）+ 背景与 buffer 一致（NormalFloat→Normal），
--- 标题与按键提示直接渲染在边框线上，无全屏遮罩，输入时可对照代码；
--- 保存后写入会话备注并在源缓冲区渲染 extmark（侧栏 sign + 行尾预览）
-local function add_note_popup(range)
+-- 备注内联输入：不再用覆盖内容的弹窗，而是在标注行下方"撑开"一道缝隙：
+-- - extmark virt_lines 在锚点行（普通=光标行，可视=选区末行）下方插入虚行，
+--   后续内容整体下移；虚拟行无行号、不修改 buffer（不进 undo、不置 modified）
+-- - 细线边框输入浮窗用 bufpos 锚定到 buffer 文本坐标（锚点行，第 0 列）：
+--   左侧自动与代码内容区对齐（number/sign 列宽自适应），且跟随文本滚动，
+--   与同样跟随 buffer 的 virt_lines 缝隙始终严丝合缝
+-- - 边框左上为 icon+note 标题、右下为快捷键提示（原生 title/footer），内容背景与 buffer 一致
+-- - <C-s>/<C-Enter> 保存；<Esc>/q 取消；关闭时缝隙收回，内容弹回原位
+local NOTE_INPUT_NS = vim.api.nvim_create_namespace("herder_agents_note_input")
+local NOTE_INPUT_ROWS = 2 -- 输入内容区高度
+local NOTE_GAP_ROWS = NOTE_INPUT_ROWS + 2 -- 虚行缝隙总高（内容 + 上下边框各 1 行）
+
+local function add_note_inline(range)
   local Popup = require("nui.popup")
   local loc = note_loc_label(range)
+  local src_win = vim.api.nvim_get_current_win()
+  local src_buf = range.bufnr
+  local anchor_line = range.end_line
+  local win_width = vim.api.nvim_win_get_width(src_win)
+  local win_height = vim.api.nvim_win_get_height(src_win)
 
-  local win = vim.api.nvim_get_current_win()
-  local win_width = vim.api.nvim_win_get_width(win)
-  local win_height = vim.api.nvim_win_get_height(win)
-  -- 原生边框左右各占 1 列，宽度留出余量
-  local width = math.max(20, math.min(common.clamp_popup_width(60), win_width - 4))
-  local height = 3
-  local total = height + 2 -- 顶部（标题）与底部（按键提示）边框各占一行
+  -- 锚点行下方可见空间不足时，滚动窗口腾出缝隙高度
+  vim.api.nvim_win_call(src_win, function()
+    local row = anchor_line - vim.fn.line("w0") -- 0-based
+    if row + NOTE_GAP_ROWS + 1 > win_height - 1 then
+      vim.fn.winrestview({ topline = math.max(1, anchor_line - (win_height - NOTE_GAP_ROWS - 3)) })
+    end
+  end)
 
-  -- 弹窗在窗口内的位置（0-based，position 指内容区，边框在四周各外扩 1 行/列）：
-  -- 优先边框顶部贴着光标行下方（不遮挡标注行）；下方放不下时翻到光标上方
-  local cursor = vim.api.nvim_win_get_cursor(win)
-  local row_in_win = cursor[1] - vim.fn.line("w0", win)
-  local row
-  if row_in_win + total < win_height then
-    row = row_in_win + 2
-  else
-    row = math.max(0, row_in_win - total + 1)
+  -- 虚拟行撑开缝隙（无行号；buffer 内容零修改）
+  local virt_lines = {}
+  for _ = 1, NOTE_GAP_ROWS do
+    table.insert(virt_lines, { { " " } })
   end
-  -- 内容列：给左侧边框留 1 列，右缘不超出窗口
-  local col_in_win = vim.fn.wincol() - 1
-  local col = math.max(1, math.min(col_in_win, win_width - width - 2))
+  local virt_id = vim.api.nvim_buf_set_extmark(src_buf, NOTE_INPUT_NS, anchor_line - 1, 0, {
+    virt_lines = virt_lines,
+    virt_lines_above = false,
+    strict = false,
+  })
 
+  local cleaned = false
+  local function cleanup()
+    if cleaned then
+      return
+    end
+    cleaned = true
+    if vim.api.nvim_buf_is_valid(src_buf) then
+      pcall(vim.api.nvim_buf_del_extmark, src_buf, NOTE_INPUT_NS, virt_id)
+    end
+  end
+
+  -- 细线边框输入浮窗：bufpos 锚定 buffer 文本坐标（锚点行、第 0 列，0-based），
+  -- position 为相对该文本位置的偏移：row=1 → 外框顶线 = 锚点行下一行（缝隙第 1 行）。
+  -- 原生边框的 row/col 定位【外框】（含边框）左上角，内容区自动内缩 1 行/列。
+  -- 注意：relative="win" 的原点是窗口网格左上角（含 number/sign 列），直接 col=0
+  -- 会落到行号区上；bufpos 锚定天然从代码文本区第 0 列开始，且随文本滚动
   local popup = Popup({
-    relative = "win",
-    position = { row = row, col = col },
-    size = { width = width, height = height },
+    relative = { type = "buf", position = { row = anchor_line - 1, col = 0 } },
+    position = { row = 1, col = 0 },
+    size = { width = math.max(20, win_width - 2), height = NOTE_INPUT_ROWS },
     enter = true,
-    border = { style = "single" }, -- 无 text/padding → nui 走原生边框（单窗口）
+    border = { style = "single" }, -- 无 text/padding → nui 原生边框（单窗口）
     buf_options = { filetype = "aider-input" },
     win_options = {
-      -- 背景与 buffer 一致；边框/标题用 Comment 灰，弱化"弹出框"感
-      winhighlight = "NormalFloat:Normal,FloatBorder:Comment,FloatTitle:Comment",
+      -- 内容背景与 buffer 一致；边框/标题用 Comment 灰，观感是"嵌在缝隙里"而非浮出
+      winhighlight = "Normal:Normal,NormalFloat:Normal,FloatBorder:Comment,FloatTitle:Comment",
     },
   })
 
-  -- 原生 title/footer：渲染在上/下边框线（nvim 0.9+），mount 前注入 win_config
-  popup.win_config.title = { { " Note @ " .. loc .. " ", "FloatTitle" } }
+  -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+note，右下快捷键提示
+  local icon = (config.options.icons and config.options.icons.note) or ""
+  popup.win_config.title = { { " " .. (icon ~= "" and (icon .. " ") or "") .. "note ", "FloatTitle" } }
   popup.win_config.title_pos = "left"
-  popup.win_config.footer = { { " C-s/C-Enter: save · q/Esc: cancel ", "FloatTitle" } }
+  popup.win_config.footer = { { " C-s: save · Esc: cancel ", "FloatTitle" } }
   popup.win_config.footer_pos = "right"
 
+  -- 兜底：浮窗 buffer 被任何途径销毁时收回缝隙，防止虚行残留
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = popup.bufnr,
+    once = true,
+    callback = cleanup,
+  })
+
   local function close()
+    cleanup()
     popup:unmount()
   end
 
@@ -584,32 +619,24 @@ local function add_note_popup(range)
       utils.warn("Note is empty, skip")
       return
     end
-    notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
     close()
+    notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
     utils.info("Note added @ " .. loc)
   end
 
-  popup:map("n", "q", close, mapOpts)
+  popup:map("n", "<C-s>", save, mapOpts)
+  popup:map("i", "<C-s>", save, mapOpts)
+  popup:map("n", "<C-Enter>", save, mapOpts)
+  popup:map("i", "<C-Enter>", save, mapOpts)
+  popup:map("i", "<Esc>", close, mapOpts) -- 内联轻交互：插入模式 Esc 直接取消
   popup:map("n", "<Esc>", close, mapOpts)
+  popup:map("n", "q", close, mapOpts)
   popup:map("n", "<C-q>", close, mapOpts)
   popup:map("i", "<C-q>", close, mapOpts)
-  popup:map("n", "<C-Enter>", save, mapOpts)
-  popup:map("i", "<C-Enter>", function()
-    vim.api.nvim_input("<C-[>")
-    save()
-  end, mapOpts)
-  popup:map("n", "<C-s>", save, mapOpts)
-  popup:map("i", "<C-s>", function()
-    vim.api.nvim_input("<C-[>")
-    save()
-  end, mapOpts)
 
   popup:mount()
-  -- 进入插入模式：排入原始 "i"（no-remap），回调返回后被主循环处理并停留在插入模式。
-  -- 两个要点（都踩过坑）：
-  --   1. 不能喂 "<Esc>"：普通模式触发时（最常见路径），排队的 <Esc> 会命中本窗
-  --      n 模式 <Esc>=close 映射，弹窗刚弹出即被关闭；
-  --   2. 无需清可视模式：mount(enter=true) 切换窗口时 nvim 已自动退出可视模式
+  -- 进入插入模式：排入裸 "i"（noremap），回调返回后由主循环处理（机制见 notes_view/旧版注释：
+  -- 不能注入 <Esc>，否则会命中本窗 n 模式关闭映射；mount 切窗口已自动退出可视模式）
   vim.api.nvim_feedkeys("i", "m", false)
 end
 
@@ -619,7 +646,7 @@ function M.add_note(range)
     utils.warn("No location to annotate")
     return
   end
-  add_note_popup(range)
+  add_note_inline(range)
 end
 
 local function session_files()
