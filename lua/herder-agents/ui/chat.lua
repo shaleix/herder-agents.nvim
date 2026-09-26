@@ -912,41 +912,54 @@ function M.new_tool_session(name)
   end
 end
 
--- 切换 agent 模式：按工具的 mode_switch 配置经 herdr 发送不同指令
---   { cmd = "/approvals" }  → 发送命令文本并回车（codex 审批模式选择器）
---   { keys = { "tab" } }    → 逐个发送逻辑按键（opencode Tab 循环 build/plan）
--- 返回是否成功发送（未注册 / 未配置 / pane 不存在时为 false）
-function M.switch_tool_mode(name)
+-- 通用：按 { cmd } 或 { keys } 配置向工具 pane 发送指令（mode_switch / model_switch 共用）
+-- cmd → 发送命令文本并回车；keys → 逐个发送逻辑按键
+local function send_tool_directive(name, spec, what)
   local tool = config.options.tools[name]
   if not tool then
     utils.err(name .. " is not a herdr CLI tool")
     return false
   end
-  local ms = tool.mode_switch
-  if type(ms) ~= "table" or (not ms.cmd and not ms.keys) then
-    utils.warn(name .. ": no mode_switch configured (tools." .. name .. ".mode_switch)")
+  if type(spec) ~= "table" or (not spec.cmd and not spec.keys) then
+    utils.warn(name .. ": no " .. what .. " configured (tools." .. name .. "." .. what .. ")")
     return false
   end
   local pane = cli_pane(name)
   if not pane then
     return false
   end
-  if ms.cmd then
-    herdr_cli_send_prompt(pane.pane_id, tool, ms.cmd)
+  if spec.cmd then
+    herdr_cli_send_prompt(pane.pane_id, tool, spec.cmd)
     herdr_cli("pane", "send-keys", pane.pane_id, "enter")
-    utils.info(name .. ": mode command sent → " .. ms.cmd)
+    utils.info(name .. ": " .. what .. " command sent → " .. spec.cmd)
     return true
   end
-  for _, key in ipairs(ms.keys) do
+  for _, key in ipairs(spec.keys) do
     -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
     vim.fn.system({ "herdr", "pane", "send-keys", pane.pane_id, key })
     if vim.v.shell_error ~= 0 then
-      utils.err("mode key rejected by herdr: " .. tostring(key))
+      utils.err(what .. " key rejected by herdr: " .. tostring(key))
       return false
     end
   end
-  utils.info(name .. ": mode key sent → " .. table.concat(ms.keys, " "))
+  utils.info(name .. ": " .. what .. " keys sent → " .. table.concat(spec.keys, " "))
   return true
+end
+
+-- 切换 agent 模式：按工具的 mode_switch 配置经 herdr 发送不同指令
+--   opencode v2: { keys = { "shift+tab" } }（agent.cycle 循环 build/plan）
+--   codex:       { cmd = "/approvals" }（审批模式选择器）
+function M.switch_tool_mode(name)
+  local tool = config.options.tools[name]
+  return send_tool_directive(name, tool and tool.mode_switch, "mode_switch")
+end
+
+-- 切换模型：按工具的 model_switch 配置经 herdr 发送指令（codex 走专用重启流程，不经此函数）
+--   opencode v2: { keys = { "ctrl+x", "m" } } 打开模型选择对话框（leader + model.list），
+--   在 pane 内选中即会话内实时生效，无需重启；{ keys = { "f2" } } 则直接循环最近使用模型
+function M.switch_tool_model(name)
+  local tool = config.options.tools[name]
+  return send_tool_directive(name, tool and tool.model_switch, "model_switch")
 end
 
 -- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交

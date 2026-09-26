@@ -23,6 +23,10 @@ M.defaults = {
   --                   { cmd = "/approvals" }     发命令文本并回车
   --                 未配置时该工具不支持切换（仅提示）。示例：
   --                   claude = { mode_switch = { keys = { "shift+tab" } } } -- 循环权限模式
+  --   model_switch  模型切换（<leader>hm；codex 有专用 provider/model 重启流程，不走此配置），
+  --                 格式同 mode_switch。示例：
+  --                   opencode v2 = { keys = { "ctrl+x", "m" } } -- 打开模型选择对话框（leader+model.list）
+  --                   快捷循环最近模型 = { keys = { "f2" } }      -- model.cycle_recent
   tools = { -- opencode: 与 omp 一样用 Esc 中断运行中的 agent；ctrl+c 只会清空输入框（双击则退出）
     opencode = {
       title = " OpenCode Chat ",
@@ -32,6 +36,8 @@ M.defaults = {
       -- opencode v2：agent.cycle 默认 shift+tab（循环 build/plan）；v2 里 tab 是补全键！
       -- v1 时代的 agent_cycle 才是 tab，用 v1 的话改成 { keys = { "tab" } }
       mode_switch = { keys = { "shift+tab" } },
+      -- opencode v2：leader(ctrl+x) + model.list(<leader>m) 打开模型对话框，pane 内选择即实时生效
+      model_switch = { keys = { "ctrl+x", "m" } },
     },
     qodercli = { title = " Qoder CLI Chat ", paste_wrap = true },
     crush = { title = " Crush Chat " },

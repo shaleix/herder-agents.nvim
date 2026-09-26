@@ -57,7 +57,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals`) |
-| `<leader>hm` | switch codex provider/model (codex only) |
+| `<leader>hm` | switch model — codex: provider/model picker + session resume; opencode v2: opens the in-pane model dialog (`ctrl+x m`); other tools via `model_switch` config |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 `Ctrl+t` insert symbol path · `Ctrl+d` insert diagnostics · `dd`/`D` drop/clear attachments.
@@ -113,7 +113,8 @@ opts = {
   default_tool = "opencode",
   tools = { -- add any CLI agent here
     gemini = { title = " Gemini Chat " },
-    -- mode_switch drives <leader>hM: keys = herdr send-keys, cmd = text + Enter
+    -- mode_switch drives <leader>hM, model_switch drives <leader>hm
+    -- (keys = herdr send-keys, cmd = text + Enter); opencode/codex ship sensible defaults
     claude = { title = " Claude Chat ", mode_switch = { keys = { "shift+tab" } } },
   },
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
@@ -128,7 +129,7 @@ opts = {
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
-`add_note()`, `notes_view()`, `switch_mode()`, `switch_codex_model()`, `send_prompt(tool, text)` (submit without the popup),
+`add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`, `send_prompt(tool, text)` (submit without the popup),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
 `require("herder-agents.notes")` is the session note store (`add` / `list` / `checked` /
 `toggle` / `remove` / `clear`).

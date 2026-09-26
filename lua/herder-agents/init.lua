@@ -170,11 +170,11 @@ setup_keymaps = function()
     M.switch_mode()
   end, "AI switch agent mode")
 
-  -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
-  -- 用 codex resume <session> -m <model> -c model_provider=<provider> 重启
+  -- 模型切换：codex 走专用 provider/model 重启流程（记录会话 → 选择 → /quit →
+  -- codex resume <session> -m <model>）；其他工具按 model_switch 配置经 herdr 发送
   map("codex_model", { "n", "x" }, function()
-    M.switch_codex_model()
-  end, "AI switch codex model")
+    M.switch_model()
+  end, "AI switch model")
 end
 
 -- ---------------------------------------------------------------------------
@@ -246,12 +246,24 @@ function M.switch_tool()
   end)
 end
 
-function M.switch_codex_model()
-  if tools.current_name() ~= "codex" then
-    require("herder-agents.utils").warn("Switch model 仅支持 codex（当前: " .. tools.current_name() .. "）")
+-- 切换模型（<leader>hm 统一入口）：
+-- codex → 专用 provider/model 选择 + 会话 resume 重启流程；
+-- 其他工具 → 按 tools.<name>.model_switch 经 herdr 发送 keys/cmd
+--（opencode v2 默认 ctrl+x m 打开模型选择对话框，pane 内选中即会话内实时生效，无需重启）
+function M.switch_model()
+  if tools.current_name() == "codex" then
+    require("herder-agents.codex_model").switch()
     return
   end
-  require("herder-agents.codex_model").switch()
+  local backend = tools.backend()
+  if backend and backend.switch_model then
+    backend.switch_model()
+  end
+end
+
+-- 兼容旧 API：等价于 switch_model()（不再仅限 codex）
+function M.switch_codex_model()
+  M.switch_model()
 end
 
 -- ---------------------------------------------------------------------------

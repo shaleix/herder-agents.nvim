@@ -104,6 +104,7 @@ for _, fn in ipairs({
   "add_note",
   "notes_view",
   "switch_mode",
+  "switch_model",
   "switch_codex_model",
 }) do
   check(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")

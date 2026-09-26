@@ -43,6 +43,9 @@ function M.register_herdr_tools()
       switch_mode = function()
         chat.switch_tool_mode(name)
       end,
+      switch_model = function()
+        chat.switch_tool_model(name)
+      end,
     })
   end
 end
