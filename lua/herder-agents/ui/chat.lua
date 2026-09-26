@@ -912,8 +912,29 @@ function M.new_tool_session(name)
   end
 end
 
+-- 把 herdr 焦点跳到目标 pane：以调用方 pane（nvim 进程的 HERDR_PANE_ID，注意不能用
+-- --current——那解析为 herdr UI 当前聚焦 pane，可能漂在别的 workspace）为基准，
+-- 探测目标是哪个方向的直接邻居，再向该方向 focus（跨 workspace/tab 会随焦点切换）。
+-- 非直接邻居时返回 false（不做多跳游走，避免焦点乱闪）
+local function focus_pane(pane_id)
+  local self = vim.env.HERDR_PANE_ID
+  if not self or self == "" then
+    return false
+  end
+  for _, dir in ipairs({ "right", "left", "down", "up" }) do
+    local res = herdr_cli("pane", "neighbor", "--direction", dir, "--pane", self)
+    local nb = res and res.result and res.result.neighbor
+    if nb and nb.neighbor_pane_id == pane_id then
+      herdr_cli("pane", "focus", "--direction", dir, "--pane", self)
+      return true
+    end
+  end
+  return false
+end
+
 -- 通用：按 { cmd } 或 { keys } 配置向工具 pane 发送指令（mode_switch / model_switch 共用）
--- cmd → 发送命令文本并回车；keys → 逐个发送逻辑按键
+-- cmd → 发送命令文本并回车；keys → 逐个发送逻辑按键；
+-- focus = true → 发送后把 herdr 焦点跳到该 pane（指令打开 pane 内对话框需要上下键选择时用）
 local function send_tool_directive(name, spec, what)
   local tool = config.options.tools[name]
   if not tool then
@@ -932,17 +953,20 @@ local function send_tool_directive(name, spec, what)
     herdr_cli_send_prompt(pane.pane_id, tool, spec.cmd)
     herdr_cli("pane", "send-keys", pane.pane_id, "enter")
     utils.info(name .. ": " .. what .. " command sent → " .. spec.cmd)
-    return true
-  end
-  for _, key in ipairs(spec.keys) do
-    -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
-    vim.fn.system({ "herdr", "pane", "send-keys", pane.pane_id, key })
-    if vim.v.shell_error ~= 0 then
-      utils.err(what .. " key rejected by herdr: " .. tostring(key))
-      return false
+  else
+    for _, key in ipairs(spec.keys) do
+      -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
+      vim.fn.system({ "herdr", "pane", "send-keys", pane.pane_id, key })
+      if vim.v.shell_error ~= 0 then
+        utils.err(what .. " key rejected by herdr: " .. tostring(key))
+        return false
+      end
     end
+    utils.info(name .. ": " .. what .. " keys sent → " .. table.concat(spec.keys, " "))
   end
-  utils.info(name .. ": " .. what .. " keys sent → " .. table.concat(spec.keys, " "))
+  if spec.focus and not focus_pane(pane.pane_id) then
+    utils.info(name .. ": pane 不是直接邻居，请手动切换 herdr 焦点完成选择")
+  end
   return true
 end
 

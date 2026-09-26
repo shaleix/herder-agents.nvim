@@ -56,8 +56,8 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
-| `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals`) |
-| `<leader>hm` | switch model — codex: provider/model picker + session resume; opencode v2: opens the in-pane model dialog (`ctrl+x m`); other tools via `model_switch` config |
+| `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals` + focus jump) |
+| `<leader>hm` | switch model — codex: provider/model picker + session resume; opencode v2: opens the in-pane model dialog (`ctrl+x m`) and jumps herdr focus to the pane; other tools via `model_switch` config |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 `Ctrl+t` insert symbol path · `Ctrl+d` insert diagnostics · `dd`/`D` drop/clear attachments.
@@ -114,7 +114,9 @@ opts = {
   tools = { -- add any CLI agent here
     gemini = { title = " Gemini Chat " },
     -- mode_switch drives <leader>hM, model_switch drives <leader>hm
-    -- (keys = herdr send-keys, cmd = text + Enter); opencode/codex ship sensible defaults
+    -- (keys = herdr send-keys, cmd = text + Enter, focus = jump herdr focus to
+    --  the pane afterwards — for directives that open an in-pane dialog);
+    -- opencode/codex ship sensible defaults
     claude = { title = " Claude Chat ", mode_switch = { keys = { "shift+tab" } } },
   },
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
