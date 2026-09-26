@@ -71,7 +71,8 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   following content is pushed down by virtual lines (no line numbers, the buffer
   is never modified) and you type in place, right where you are looking. The thin
   border shows a `󰆈 note` title (top-left) and the key hints (bottom-right), with
-  its left edge aligned to the code. `Ctrl+Enter`/`Ctrl+s` saves, `Esc`/`q`
+  its left edge aligned to the code. `Ctrl+Enter` saves (same submit key as the
+  chat popup), `Esc`/`q`
   cancels; the gap collapses either way. Triggering on a position that already
   has a note re-opens it **prefilled for editing** (`󰆈 edit note` title) — saving
   updates it in place instead of adding a duplicate.

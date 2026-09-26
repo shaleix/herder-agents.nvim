@@ -531,7 +531,7 @@ end
 --   左侧自动与代码内容区对齐（number/sign 列宽自适应），且跟随文本滚动，
 --   与同样跟随 buffer 的 virt_lines 缝隙始终严丝合缝
 -- - 边框左上为 icon+note 标题、右下为快捷键提示（原生 title/footer），内容背景与 buffer 一致
--- - <C-s>/<C-Enter> 保存；<Esc>/q 取消；关闭时缝隙收回，内容弹回原位
+-- - <C-Enter> 保存（与 Chat 弹窗提交键统一）；<Esc>/q 取消；关闭时缝隙收回，内容弹回原位
 local NOTE_INPUT_NS = vim.api.nvim_create_namespace("herder_agents_note_input")
 local NOTE_INPUT_ROWS = 2 -- 输入内容区高度
 local NOTE_GAP_ROWS = NOTE_INPUT_ROWS + 2 -- 虚行缝隙总高（内容 + 上下边框各 1 行）
@@ -608,7 +608,7 @@ local function add_note_inline(range)
     { " " .. (icon ~= "" and (icon .. " ") or "") .. (existing and "edit note " or "note "), "FloatTitle" },
   }
   popup.win_config.title_pos = "left"
-  popup.win_config.footer = { { " C-s: save · Esc: cancel ", "FloatTitle" } }
+  popup.win_config.footer = { { " C-Enter: save · Esc: cancel ", "FloatTitle" } }
   popup.win_config.footer_pos = "right"
 
   -- 兜底：浮窗 buffer 被任何途径销毁时收回缝隙，防止虚行残留
@@ -621,7 +621,7 @@ local function add_note_inline(range)
   local function close()
     cleanup()
     popup:unmount()
-    -- i-mode 映射（C-s/C-Enter/Esc）直接关闭时，浮窗卸载后焦点回到源窗口，
+    -- i-mode 映射（C-Enter/Esc）直接关闭时，浮窗卸载后焦点回到源窗口，
     -- 但插入模式会残留 —— 显式退回 normal，避免后续键入误改代码
     if vim.api.nvim_get_mode().mode:match("^[iR]") then
       vim.cmd("stopinsert")
@@ -646,8 +646,6 @@ local function add_note_inline(range)
     end
   end
 
-  popup:map("n", "<C-s>", save, mapOpts)
-  popup:map("i", "<C-s>", save, mapOpts)
   popup:map("n", "<C-Enter>", save, mapOpts)
   popup:map("i", "<C-Enter>", save, mapOpts)
   popup:map("i", "<Esc>", close, mapOpts) -- 内联轻交互：插入模式 Esc 直接取消

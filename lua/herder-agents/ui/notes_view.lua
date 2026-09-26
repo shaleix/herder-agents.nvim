@@ -217,7 +217,7 @@ function M.show()
 
   local function close()
     popup:unmount()
-    -- 提交/取消可能发生在插入模式（Extra Prompt 行键入后直接 C-s/C-Enter/Esc）：
+    -- 提交/取消可能发生在插入模式（Extra Prompt 行键入后直接 <CR>/<C-a>/Esc）：
     -- 卸载后焦点回源窗口但插入模式会残留，显式退回 normal，避免误改代码
     if vim.api.nvim_get_mode().mode:match("^[iR]") then
       vim.cmd("stopinsert")
