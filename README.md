@@ -52,7 +52,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hx` | interrupt |
 | `<leader>hc` | new session |
 | `<leader>hh` | prompt history |
-| `<leader>ht` | switch tool |
+| `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first) |
 | `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
@@ -103,7 +103,7 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 ## Commands
 
 - `:AIToggle [tool]` — toggle, callable from external scripts (worktree hooks)
-- `:AISwitch [tool]` — switch tool (no argument cycles)
+- `:AISwitch [tool]` — switch tool (no argument cycles); like `<leader>ht`, replaces the agent pane
 
 ## Configuration
 
@@ -122,6 +122,7 @@ opts = {
   },
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
+  switch_replace = true, -- switching tools closes the old agent & restarts the new one in its pane
   codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
   icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
   notes = { preview_width = 40 }, -- end-of-line note preview width

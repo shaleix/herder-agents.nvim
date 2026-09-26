@@ -75,6 +75,7 @@ local names = tools.names()
 check(names[1] == "opencode", "切换器首项为 opencode")
 check(vim.tbl_contains(names, "mycli"), "setup 新增工具 mycli 已注册")
 check(vim.tbl_contains(names, "hermes"), "默认工具 hermes 已注册")
+check(require("herder-agents.config").options.switch_replace == true, "switch_replace 默认开启")
 
 -- 工具切换
 check(tools.set("codex"), "set codex 成功")

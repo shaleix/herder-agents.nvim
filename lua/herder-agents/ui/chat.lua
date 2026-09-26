@@ -984,6 +984,160 @@ function M.switch_tool_model(name)
   return send_tool_directive(name, tool and tool.model_switch, "model_switch")
 end
 
+-- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI，同 codex_model 模式）
+local function poll(cond, interval_ms, max_ticks, on_done)
+  local tick = 0
+  local function step()
+    tick = tick + 1
+    local ok, res = pcall(cond, tick)
+    if ok and res then
+      on_done(true)
+      return
+    end
+    if tick >= max_ticks then
+      on_done(false)
+      return
+    end
+    vim.defer_fn(step, interval_ms)
+  end
+  vim.defer_fn(step, interval_ms)
+end
+
+-- pane 前台是否运行着非 shell 进程（agent）；返回 running, 前台进程组 id
+-- 以 process-info 的前台进程为准（herdr 的 agent 检测有秒级延迟，不可靠）
+local function pane_agent_running(pane_id)
+  local info = herdr_cli("pane", "process-info", "--pane", pane_id)
+  local pi = info and info.result and info.result.process_info
+  if not pi then
+    return nil -- 查询失败（pane 可能已关闭）
+  end
+  for _, p in ipairs(pi.foreground_processes or {}) do
+    if p.pid ~= pi.shell_pid then
+      return true, pi.foreground_process_group_id
+    end
+  end
+  return false
+end
+
+-- 切换 agent 的前置检查：旧工具 agent 正在 working/blocked 时先中断再切
+--（与 codex model 切换的守卫一致；无 pane / 非 herdr 环境直接放行）
+function M.can_replace_tool(old_name)
+  if vim.env.HERDR_ENV ~= "1" or not old_name then
+    return true
+  end
+  local pane = herdr_find_pane(old_name, current_herdr_tab_id())
+  if pane and (pane.agent_status == "working" or pane.agent_status == "blocked") then
+    utils.warn(
+      old_name
+        .. " 正在 "
+        .. pane.agent_status
+        .. "，请先用 "
+        .. config.key_hint("interrupt", "<leader>hx")
+        .. " 中断后再切换"
+    )
+    return false
+  end
+  return true
+end
+
+-- 切换 agent（类似 codex model 切换的"退出 → 同 pane 重启"流程）：
+-- 1. 新工具已有 pane → 直接关闭旧工具 pane（herdr 会一并结束其进程）
+-- 2. 否则优雅退出旧 pane 的 agent（TERM 前台进程组，卡住则 KILL），
+--    pane 回到 shell 后在同一 pane 启动新工具并改名（herdr 布局原位保持）
+-- 3. 旧工具无 pane → 新工具也无 pane 时按 split 流程新建（同 toggle）
+function M.replace_tool(old_name, new_name)
+  if vim.env.HERDR_ENV ~= "1" then
+    utils.err("agent 替换切换需要在 Herdr 中使用")
+    return false
+  end
+  local tab_id = current_herdr_tab_id()
+  local new_cmd = config.tool_cmd(new_name) or new_name
+  local new_pane = herdr_find_pane(new_name, tab_id)
+  local old_pane = old_name and herdr_find_pane(old_name, tab_id) or nil
+
+  if not old_pane then
+    if not new_pane then
+      toggle_cli_in_herdr_pane(new_cmd, new_name)
+    end
+    return true
+  end
+
+  if new_pane then
+    herdr_cli("pane", "close", old_pane.pane_id)
+    utils.info("已关闭 " .. old_name .. " pane，当前 agent: " .. new_name)
+    return true
+  end
+
+  local pane_id = old_pane.pane_id
+  utils.info("切换 agent：" .. old_name .. " → " .. new_name .. "，等待旧 agent 退出…")
+
+  local function launch_new()
+    herdr_cli("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
+    herdr_cli("pane", "run", pane_id, new_cmd)
+    herdr_cli("pane", "rename", pane_id, new_name)
+    poll(
+      function()
+        return pane_agent_running(pane_id) == true
+      end,
+      400,
+      40,
+      function(ok)
+        if ok then
+          utils.info("已切换到 " .. new_name)
+        else
+          utils.warn("启动命令已发送，但未能确认 " .. new_name .. " 就绪，请检查 pane")
+        end
+      end
+    )
+  end
+
+  local running, fgid = pane_agent_running(pane_id)
+  if not running then
+    launch_new() -- 旧 agent 已退出（pane 里是 shell），直接重启新的
+    return true
+  end
+
+  -- 优雅退出：TERM 前台进程组（负 pid = 进程组，shell 不在该组内不受影响）
+  if fgid then
+    vim.fn.system({ "kill", "-TERM", "-" .. tostring(fgid) })
+  end
+  poll(
+    function()
+      local r = pane_agent_running(pane_id)
+      return r == false or r == nil
+    end,
+    400,
+    25,
+    function(ok)
+      if ok then
+        launch_new()
+        return
+      end
+      -- TERM 未生效 → KILL 强杀再等一轮
+      local _, fg2 = pane_agent_running(pane_id)
+      if fg2 then
+        vim.fn.system({ "kill", "-KILL", "-" .. tostring(fg2) })
+      end
+      poll(
+        function()
+          local r = pane_agent_running(pane_id)
+          return r == false or r == nil
+        end,
+        400,
+        15,
+        function(ok2)
+          if ok2 then
+            launch_new()
+          else
+            utils.err(old_name .. " 未能退出，已放弃切换；请手动检查 pane")
+          end
+        end
+      )
+    end
+  )
+  return true
+end
+
 -- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交
 --（外部调用方使用，如 fzf-lua 诊断修复、sessions.send）
 function M.send_tool_prompt(name, text)

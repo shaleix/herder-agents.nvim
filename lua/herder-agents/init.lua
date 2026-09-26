@@ -19,6 +19,20 @@ local tools = require("herder-agents.tools")
 -- 前向声明（定义见文件后方，setup 引用）
 local setup_commands
 local setup_keymaps
+local switch_to_tool
+
+-- 切换工具 = 切换 agent：守卫校验（旧 agent working/blocked 时先中断）→ 设置新工具 →
+-- 按 switch_replace 关闭旧 agent 并在原 pane 重启新工具（类似 codex model 切换流程）
+switch_to_tool = function(name)
+  local old = tools.current_name()
+  local replace = vim.env.HERDR_ENV == "1" and config.options.switch_replace and old ~= name
+  if replace and not require("herder-agents.ui.chat").can_replace_tool(old) then
+    return
+  end
+  if tools.set(name) and replace then
+    require("herder-agents.ui.chat").replace_tool(old, name)
+  end
+end
 
 ---@param opts table|nil 见 herder-agents.config
 function M.setup(opts)
@@ -57,11 +71,11 @@ setup_commands = function()
   if cmds.switch then
     vim.api.nvim_create_user_command(cmds.switch, function(opts)
       if opts.args ~= "" then
-        tools.set(opts.args)
+        switch_to_tool(opts.args)
       else
         local names = tools.names()
         local current_index = vim.fn.index(names, tools.current_name())
-        tools.set(names[(current_index + 1) % #names + 1])
+        switch_to_tool(names[(current_index + 1) % #names + 1])
       end
     end, {
       nargs = "?",
@@ -232,7 +246,7 @@ function M.switch_tool()
       actions = {
         ["default"] = function(selected)
           if selected and selected[1] then
-            tools.set(selected[1])
+            switch_to_tool(selected[1])
           end
         end,
       },
@@ -241,7 +255,7 @@ function M.switch_tool()
   end
   vim.ui.select(names, { prompt = "AI Tool> " }, function(choice)
     if choice then
-      tools.set(choice)
+      switch_to_tool(choice)
     end
   end)
 end

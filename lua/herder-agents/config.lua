@@ -64,6 +64,11 @@ M.defaults = {
   -- herdr 分屏参数
   split = { direction = "right", ratio = 0.55 },
 
+  -- 切换工具（<leader>ht / :AISwitch）时关闭当前 agent，并在原 pane 重启新工具
+  --（类似 codex model 切换流程，herdr 布局原位保持；旧 agent working/blocked 时需先中断）。
+  -- 置 false 则只切换目标工具标记（旧行为，两个 agent pane 并存）
+  switch_replace = true,
+
   -- prompt 历史文件（按 cwd 分键；保持与原配置相同路径，历史可共用）
   history_file = "/tmp/cc_prompt_history.json",
 
