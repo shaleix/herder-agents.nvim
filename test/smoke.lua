@@ -37,6 +37,7 @@ plugin.setup({
     add_buffer = "<leader>ha",
     note = "<leader>hn",
     notes_view = "<leader>hN",
+    switch_mode = "<leader>hM",
     codex_model = "<leader>hm",
   },
 })
@@ -53,6 +54,8 @@ check(has_map(" ha", "n"), "<leader>ha 已注册")
 check(has_map(" hn", "n"), "<leader>hn (n) 已注册")
 check(has_map(" hn", "x"), "<leader>hn (x) 已注册")
 check(has_map(" hN", "n"), "<leader>hN (n) 已注册")
+check(has_map(" hM", "n"), "<leader>hM (n) 已注册")
+check(has_map(" hM", "x"), "<leader>hM (x) 已注册")
 check(has_map(" hm", "n"), "<leader>hm 已注册")
 check(not has_map(" hs", "n"), "未传入的动作不注册")
 check(plugin.register_tool == nil, "外部后端注册机制已移除（herdr-only）")
@@ -100,6 +103,7 @@ for _, fn in ipairs({
   "add_buffer",
   "add_note",
   "notes_view",
+  "switch_mode",
   "switch_codex_model",
 }) do
   check(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")

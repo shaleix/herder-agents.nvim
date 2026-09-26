@@ -912,6 +912,43 @@ function M.new_tool_session(name)
   end
 end
 
+-- 切换 agent 模式：按工具的 mode_switch 配置经 herdr 发送不同指令
+--   { cmd = "/approvals" }  → 发送命令文本并回车（codex 审批模式选择器）
+--   { keys = { "tab" } }    → 逐个发送逻辑按键（opencode Tab 循环 build/plan）
+-- 返回是否成功发送（未注册 / 未配置 / pane 不存在时为 false）
+function M.switch_tool_mode(name)
+  local tool = config.options.tools[name]
+  if not tool then
+    utils.err(name .. " is not a herdr CLI tool")
+    return false
+  end
+  local ms = tool.mode_switch
+  if type(ms) ~= "table" or (not ms.cmd and not ms.keys) then
+    utils.warn(name .. ": no mode_switch configured (tools." .. name .. ".mode_switch)")
+    return false
+  end
+  local pane = cli_pane(name)
+  if not pane then
+    return false
+  end
+  if ms.cmd then
+    herdr_cli_send_prompt(pane.pane_id, tool, ms.cmd)
+    herdr_cli("pane", "send-keys", pane.pane_id, "enter")
+    utils.info(name .. ": mode command sent → " .. ms.cmd)
+    return true
+  end
+  for _, key in ipairs(ms.keys) do
+    -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
+    vim.fn.system({ "herdr", "pane", "send-keys", pane.pane_id, key })
+    if vim.v.shell_error ~= 0 then
+      utils.err("mode key rejected by herdr: " .. tostring(key))
+      return false
+    end
+  end
+  utils.info(name .. ": mode key sent → " .. table.concat(ms.keys, " "))
+  return true
+end
+
 -- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交
 --（外部调用方使用，如 fzf-lua 诊断修复、sessions.send）
 function M.send_tool_prompt(name, text)

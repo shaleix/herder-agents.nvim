@@ -28,6 +28,7 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       add_buffer = "<leader>ha",
       note = "<leader>hn",
       notes_view = "<leader>hN",
+      switch_mode = "<leader>hM",
       codex_model = "<leader>hm",
     },
   },
@@ -56,6 +57,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hr` / `<leader>ha` | add current buffer as read-only / editable attachment |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hN` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
+| `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals`) |
 | `<leader>hm` | switch codex provider/model (codex only) |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
@@ -112,6 +114,8 @@ opts = {
   default_tool = "opencode",
   tools = { -- add any CLI agent here
     gemini = { title = " Gemini Chat " },
+    -- mode_switch drives <leader>hM: keys = herdr send-keys, cmd = text + Enter
+    claude = { title = " Claude Chat ", mode_switch = { keys = { "shift+tab" } } },
   },
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
@@ -125,7 +129,7 @@ opts = {
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
-`add_note()`, `notes_view()`, `switch_codex_model()`, `send_prompt(tool, text)` (submit without the popup),
+`add_note()`, `notes_view()`, `switch_mode()`, `switch_codex_model()`, `send_prompt(tool, text)` (submit without the popup),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
 `require("herder-agents.notes")` is the session note store (`add` / `list` / `checked` /
 `toggle` / `remove` / `clear`).

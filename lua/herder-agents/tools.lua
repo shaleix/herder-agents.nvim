@@ -40,6 +40,9 @@ function M.register_herdr_tools()
       new = function()
         chat.new_tool_session(name)
       end,
+      switch_mode = function()
+        chat.switch_tool_mode(name)
+      end,
     })
   end
 end

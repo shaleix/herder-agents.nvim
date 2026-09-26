@@ -18,15 +18,33 @@ M.defaults = {
   --   paste_wrap    发送文本用 bracketed paste 包裹（TUI 支持时开启，防多行被逐行提交）
   --   interrupt_key 中断按键（默认 ctrl+c）
   --   new_cmd       新会话命令（默认 /clear；codex/opencode 的会话重置命令是 /new）
+  --   mode_switch   agent 模式切换（<leader>hM 经 herdr 发送，不同 agent 不同指令）：
+  --                   { keys = { "shift+tab" } } 发逻辑按键（herdr pane send-keys）
+  --                   { cmd = "/approvals" }     发命令文本并回车
+  --                 未配置时该工具不支持切换（仅提示）。示例：
+  --                   claude = { mode_switch = { keys = { "shift+tab" } } } -- 循环权限模式
   tools = { -- opencode: 与 omp 一样用 Esc 中断运行中的 agent；ctrl+c 只会清空输入框（双击则退出）
-    opencode = { title = " OpenCode Chat ", paste_wrap = true, interrupt_key = "esc", new_cmd = "/new" },
+    opencode = {
+      title = " OpenCode Chat ",
+      paste_wrap = true,
+      interrupt_key = "esc",
+      new_cmd = "/new",
+      -- opencode v2：agent.cycle 默认 shift+tab（循环 build/plan）；v2 里 tab 是补全键！
+      -- v1 时代的 agent_cycle 才是 tab，用 v1 的话改成 { keys = { "tab" } }
+      mode_switch = { keys = { "shift+tab" } },
+    },
     qodercli = { title = " Qoder CLI Chat ", paste_wrap = true },
     crush = { title = " Crush Chat " },
     -- omp: Esc interrupts the running agent; Ctrl+C only clears the editor
     -- (double Ctrl+C shuts omp down), so never send ctrl+c there.
     omp = { title = " Oh My Pi Chat ", interrupt_key = "esc" },
     pi = { title = " Pi Chat " },
-    codex = { title = " Codex CLI Chat ", paste_wrap = true, new_cmd = "/new" },
+    codex = {
+      title = " Codex CLI Chat ",
+      paste_wrap = true,
+      new_cmd = "/new",
+      mode_switch = { cmd = "/approvals" }, -- 打开审批模式选择器
+    },
     hermes = { title = " Hermes CLI Chat ", cmd = "hermes --tui" },
   },
 
@@ -96,6 +114,7 @@ M.defaults = {
     -- add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑附件
     -- note = "<leader>hn", -- 在光标行 / 可视选区添加备注
     -- notes_view = "<leader>hN", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
+    -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
     -- codex_model = "<leader>hm",
   },
 }

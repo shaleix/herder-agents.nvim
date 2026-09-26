@@ -165,6 +165,11 @@ setup_keymaps = function()
     M.notes_view()
   end, "AI notes view (review & send)")
 
+  -- 切换 agent 模式（按工具 mode_switch 配置经 herdr 发送指令）
+  map("switch_mode", { "n", "x" }, function()
+    M.switch_mode()
+  end, "AI switch agent mode")
+
   -- codex 专用：记录当前会话 → 选 provider/model → /quit 退出后
   -- 用 codex resume <session> -m <model> -c model_provider=<provider> 重启
   map("codex_model", { "n", "x" }, function()
@@ -195,6 +200,15 @@ end
 
 function M.new_session()
   tools.backend().new()
+end
+
+-- 切换当前工具的 agent 模式（opencode: Tab 循环 build/plan；codex: /approvals；
+-- 其余工具在 config.tools.<name>.mode_switch 里自定义 keys/cmd）
+function M.switch_mode()
+  local backend = tools.backend()
+  if backend and backend.switch_mode then
+    backend.switch_mode()
+  end
 end
 
 function M.history()
