@@ -87,6 +87,10 @@ function M.show()
     width = math.max(width, vim.fn.strdisplaywidth(text))
   end
   local extra_row = #lines + 1
+  if #lines > 0 then
+    lines[#lines + 1] = "" -- 备注列表与 Extra Prompt 之间的空行分隔
+    extra_row = #lines + 1
+  end
   lines[extra_row] = EXTRA_LABEL
   -- 底部提示较长，宽度下限保证提示基本完整；上限与 Chat 一致做窗口宽度收敛
   width = math.min(common.clamp_popup_width(90), math.max(76, width + 2))
@@ -131,6 +135,9 @@ function M.show()
     for i, note in ipairs(cur) do
       lines[i] = note_line(note)
       line_to_id[i] = note.id
+    end
+    if #lines > 0 then
+      lines[#lines + 1] = "" -- 空行分隔（与 show() 初始渲染一致）
     end
     extra_row = #lines + 1
     lines[extra_row] = kept_extra
@@ -242,9 +249,9 @@ function M.show()
   common.dim(popup.bufnr) -- 与 Chat 一致的全屏遮罩（生命周期挂在弹窗 buffer 上）
   render()
 
-  -- 光标落在 Extra Prompt 行并进入插入模式（排队裸 "A"，机制同 add_note_popup）
-  pcall(vim.api.nvim_win_set_cursor, popup.winid, { extra_row, 0 })
-  vim.api.nvim_feedkeys("A", "m", false)
+  -- 光标停在第一条备注上（普通模式）：<Space>/x 切换勾选、dd 删除、<CR> 直接提交、
+  -- <C-a> 追加不回车；要补 Extra Prompt 时移到末行按 A/i 进入插入
+  pcall(vim.api.nvim_win_set_cursor, popup.winid, { 1, 0 })
 end
 
 return M

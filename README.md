@@ -71,13 +71,16 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   is never modified) and you type in place, right where you are looking. The thin
   border shows a `✎ note` title (top-left) and the key hints (bottom-right), with
   its left edge aligned to the code. `Ctrl+Enter`/`Ctrl+s` saves, `Esc`/`q`
-  cancels; the gap collapses either way.
+  cancels; the gap collapses either way. Triggering on a position that already
+  has a note re-opens it **prefilled for editing** (`✎ edit note` title) — saving
+  updates it in place instead of adding a duplicate.
 - Each note is marked in the source buffer with a gutter sign (`✎`) and an
   end-of-line preview. Markers follow the code as you edit (extmark-based), so the
   note stays anchored to the right lines.
 - `<leader>hN` opens the **notes popup** (independent of the chat popup): all notes
-  listed and **checked by default**, with an `Extra Prompt: - ` line at the bottom
-  (same buffer) for an extra instruction to send along with the notes.
+  listed and **checked by default** (cursor starts on the first note, normal
+  mode), a blank line, then an `Extra Prompt: - ` line at the bottom (same
+  buffer) for an extra instruction to send along with the notes.
   `<Space>`/`x` toggles a note · `dd` deletes it · `q`/`Esc` closes.
 - Two ways to submit:
   - `<CR>` — **send now**: text goes to the agent pane followed by Enter.

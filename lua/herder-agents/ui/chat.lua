@@ -580,6 +580,10 @@ local function add_note_inline(range)
     end
   end
 
+  -- 同一位置已有备注：预填其内容进入编辑（保存时原地更新，不重复新建）
+  notes.sync_positions()
+  local existing = notes.find(range.path, range.start_line, range.end_line)
+
   -- 细线边框输入浮窗：bufpos 锚定 buffer 文本坐标（锚点行、第 0 列，0-based），
   -- position 为相对该文本位置的偏移：row=1 → 外框顶线 = 锚点行下一行（缝隙第 1 行）。
   -- 原生边框的 row/col 定位【外框】（含边框）左上角，内容区自动内缩 1 行/列。
@@ -598,9 +602,11 @@ local function add_note_inline(range)
     },
   })
 
-  -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+note，右下快捷键提示
+  -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+note（编辑态注明 edit），右下快捷键提示
   local icon = (config.options.icons and config.options.icons.note) or ""
-  popup.win_config.title = { { " " .. (icon ~= "" and (icon .. " ") or "") .. "note ", "FloatTitle" } }
+  popup.win_config.title = {
+    { " " .. (icon ~= "" and (icon .. " ") or "") .. (existing and "edit note " or "note "), "FloatTitle" },
+  }
   popup.win_config.title_pos = "left"
   popup.win_config.footer = { { " C-s: save · Esc: cancel ", "FloatTitle" } }
   popup.win_config.footer_pos = "right"
@@ -630,8 +636,14 @@ local function add_note_inline(range)
       return
     end
     close()
-    notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
-    utils.info("Note added @ " .. loc)
+    if existing and notes.get(existing.id) then
+      -- 编辑已有备注：原地更新文本并重渲染 ✎ 预览（不新建重复条目）
+      notes.set_text(existing.id, text)
+      utils.info("Note updated @ " .. loc)
+    else
+      notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
+      utils.info("Note added @ " .. loc)
+    end
   end
 
   popup:map("n", "<C-s>", save, mapOpts)
@@ -645,9 +657,17 @@ local function add_note_inline(range)
   popup:map("i", "<C-q>", close, mapOpts)
 
   popup:mount()
-  -- 进入插入模式：排入裸 "i"（noremap），回调返回后由主循环处理（机制见 notes_view/旧版注释：
-  -- 不能注入 <Esc>，否则会命中本窗 n 模式关闭映射；mount 切窗口已自动退出可视模式）
-  vim.api.nvim_feedkeys("i", "m", false)
+  if existing then
+    -- 编辑态：预填已有备注内容，光标到末行，排入裸 "A"（行尾进入插入，utf8 安全）
+    local pre = vim.split(existing.text, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(popup.bufnr, 0, -1, false, pre)
+    pcall(vim.api.nvim_win_set_cursor, popup.winid, { #pre, 0 })
+    vim.api.nvim_feedkeys("A", "m", false)
+  else
+    -- 进入插入模式：排入裸 "i"（noremap），回调返回后由主循环处理。
+    -- 不能注入 <Esc>：会命中本窗 n 模式关闭映射；mount 切窗口已自动退出可视模式
+    vim.api.nvim_feedkeys("i", "m", false)
+  end
 end
 
 -- 公开入口：在指定位置添加备注（init.M.add_note 调用，range 见 context.note_range）

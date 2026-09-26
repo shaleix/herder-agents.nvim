@@ -178,6 +178,38 @@ function M.get(id)
   return notes[id]
 end
 
+-- 查找同一位置的备注（路径 + 起止行完全一致）；调用前建议先 sync_positions()
+-- 供 note 输入框判断"该位置已有备注 → 预填内容进入编辑"
+---@return table|nil
+function M.find(path, start_line, end_line)
+  if start_line > end_line then
+    start_line, end_line = end_line, start_line
+  end
+  for _, note in pairs(notes) do
+    if note.path == path and note.start_line == start_line and note.end_line == end_line then
+      return note
+    end
+  end
+  return nil
+end
+
+-- 更新备注文本并重渲染其 extmark（行尾预览随之刷新）；保留 id 与勾选态
+function M.set_text(id, text)
+  local note = notes[id]
+  if not note then
+    return nil
+  end
+  note.text = text
+  if note.bufnr and note.extmark_id and api.nvim_buf_is_valid(note.bufnr) then
+    pcall(api.nvim_buf_del_extmark, note.bufnr, ns_id, note.extmark_id)
+    note.extmark_id = nil
+  end
+  if note.bufnr and api.nvim_buf_is_valid(note.bufnr) and api.nvim_buf_is_loaded(note.bufnr) then
+    render_note(note, note.bufnr)
+  end
+  return note
+end
+
 -- 切换勾选态，返回新的 checked 值
 function M.toggle(id)
   local note = notes[id]
