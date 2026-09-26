@@ -637,7 +637,7 @@ local function add_note_inline(range)
     end
     close()
     if existing and notes.get(existing.id) then
-      -- 编辑已有备注：原地更新文本并重渲染 ✎ 预览（不新建重复条目）
+      -- 编辑已有备注：原地更新文本并重渲染 sign/行尾预览（不新建重复条目）
       notes.set_text(existing.id, text)
       utils.info("Note updated @ " .. loc)
     else

@@ -69,12 +69,13 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   selected line range. An **inline input box** opens right below that line: the
   following content is pushed down by virtual lines (no line numbers, the buffer
   is never modified) and you type in place, right where you are looking. The thin
-  border shows a `✎ note` title (top-left) and the key hints (bottom-right), with
+  border shows a `󰆈 note` title (top-left) and the key hints (bottom-right), with
   its left edge aligned to the code. `Ctrl+Enter`/`Ctrl+s` saves, `Esc`/`q`
   cancels; the gap collapses either way. Triggering on a position that already
-  has a note re-opens it **prefilled for editing** (`✎ edit note` title) — saving
+  has a note re-opens it **prefilled for editing** (`󰆈 edit note` title) — saving
   updates it in place instead of adding a duplicate.
-- Each note is marked in the source buffer with a gutter sign (`✎`) and an
+- Each note is marked in the source buffer with a gutter sign (comment bubble,
+  configurable via `icons.note`) and an
   end-of-line preview. Markers follow the code as you edit (extmark-based), so the
   note stays anchored to the right lines.
 - `<leader>hN` opens the **notes popup** (independent of the chat popup): all notes
@@ -115,7 +116,7 @@ opts = {
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
   codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
-  icons = { note = "✎" }, -- gutter sign for notes ("" disables the sign)
+  icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
   notes = { preview_width = 40 }, -- end-of-line note preview width
 }
 ```
