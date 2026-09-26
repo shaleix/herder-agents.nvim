@@ -22,18 +22,75 @@ local EXTRA_LABEL = "Extra Prompt: - "
 -- 弹窗内容高亮的独立命名空间
 local ns_view = vim.api.nvim_create_namespace("herder_agents_notes_view")
 
--- 备注位置标签："rel:行" 或 "rel:起-止"
-local function loc_label(note)
-  if note.start_line == note.end_line then
-    return string.format("%s:%d", note.rel, note.start_line)
+-- 相对路径拆成 "文件名:行号" 与目录路径（dir 含尾部 /；根目录文件返回 ""）
+local function split_rel(rel, start_line, end_line)
+  local dir, name = rel:match("^(.*/)([^/]+)$")
+  if not dir then
+    dir, name = "", rel
   end
-  return string.format("%s:%d-%d", note.rel, note.start_line, note.end_line)
+  if start_line == end_line then
+    return name .. string.format(":%d", start_line), dir
+  end
+  return name .. string.format(":%d-%d", start_line, end_line), dir
 end
 
--- 备注行文本："[x] rel:line  preview"
-local function note_line(note)
-  local box = note.checked and "[x] " or "[ ] "
-  return box .. loc_label(note) .. "  " .. notes.preview_text(note.text)
+local function dw(s)
+  return vim.fn.strdisplaywidth(s)
+end
+
+-- 按显示宽度截断，超出以 … 收尾（CJK 按 2 列计，保证列对齐）
+local function truncate_dw(s, max)
+  if dw(s) <= max then
+    return s
+  end
+  local out, w = "", 0
+  for i = 1, vim.fn.strchars(s) do
+    local c = vim.fn.strcharpart(s, i - 1, 1)
+    local cw = vim.fn.strdisplaywidth(c)
+    if w + cw > max - 1 then
+      break
+    end
+    out, w = out .. c, w + cw
+  end
+  return out .. "…"
+end
+
+-- 按显示宽度补空格到固定列宽
+local function pad_dw(s, width)
+  return s .. string.rep(" ", math.max(0, width - dw(s)))
+end
+
+-- 构建备注显示行：[x] 内容  文件名:行号  目录/
+-- 内容在前（超长截断为 …）、文件名与目录在后（渲染时着 Comment 色）；
+-- 内容列与文件名列补齐到固定宽度，多条纵向对齐。
+-- 返回 lines、layouts（每行字节偏移：content_end / meta_start，供高亮）、总显示宽度
+local function build_note_lines(list)
+  local firsts, names, dirs = {}, {}, {}
+  local max_content, max_name, max_dir = 0, 0, 0
+  for i, note in ipairs(list) do
+    firsts[i] = (note.text or ""):match("[^\r\n]+") or ""
+    names[i], dirs[i] = split_rel(note.rel, note.start_line, note.end_line)
+    max_content = math.max(max_content, dw(firsts[i]))
+    max_name = math.max(max_name, dw(names[i]))
+    max_dir = math.max(max_dir, dw(dirs[i]))
+  end
+  -- 内容列宽：受弹窗宽度上限（90）约束，给文件名/目录列让位
+  local tail_w = 2 + max_name + (max_dir > 0 and (2 + max_dir) or 0)
+  local avail = common.clamp_popup_width(90) - 4 - tail_w - 2
+  local content_w = math.max(8, math.min(max_content, avail))
+
+  local out, layouts = {}, {}
+  for i, note in ipairs(list) do
+    local box = note.checked and "[x] " or "[ ] "
+    local content = pad_dw(truncate_dw(firsts[i], content_w), content_w)
+    local line = box .. content .. "  " .. pad_dw(names[i], max_name)
+    if dirs[i] ~= "" then
+      line = line .. "  " .. dirs[i]
+    end
+    out[i] = line
+    layouts[i] = { content_end = #box + #content, meta_start = #box + #content + 2 }
+  end
+  return out, layouts, 4 + content_w + tail_w
 end
 
 -- 解析 Extra Prompt 行：剥离前缀（容忍前缀被改动）后 trim
@@ -76,24 +133,13 @@ function M.show()
   local Popup = require("nui.popup")
   local NuiText = require("nui.text")
 
-  -- 预渲染各行并计算弹窗尺寸
+  -- 预计算行宽确定弹窗尺寸（具体行内容由 render() 构建）
   local lines = {}
   local line_to_id = {}
-  local width = vim.fn.strdisplaywidth(EXTRA_LABEL) + 24
-  for i, note in ipairs(list) do
-    local text = note_line(note)
-    lines[i] = text
-    line_to_id[i] = note.id
-    width = math.max(width, vim.fn.strdisplaywidth(text))
-  end
-  local extra_row = #lines + 1
-  if #lines > 0 then
-    lines[#lines + 1] = "" -- 备注列表与 Extra Prompt 之间的空行分隔
-    extra_row = #lines + 1
-  end
-  lines[extra_row] = EXTRA_LABEL
+  local _, _, content_total_w = build_note_lines(list)
   -- 底部提示较长，宽度下限保证提示基本完整；上限与 Chat 一致做窗口宽度收敛
-  width = math.min(common.clamp_popup_width(90), math.max(76, width + 2))
+  local width = math.min(common.clamp_popup_width(90), math.max(76, content_total_w + 2))
+  local extra_row = #list + 2 -- 备注行 + 空行 + Extra 行
   -- 最小高度 8 行：备注很少时弹窗也不至于过扁（与 Chat 弹窗体量接近）；上限 20，超出滚动
   local height = math.max(8, math.min(20, extra_row))
 
@@ -120,7 +166,7 @@ function M.show()
 
   local bufnr = popup.bufnr
 
-  -- 渲染全部行 + 高亮（勾选框 / 位置 / 预览 / Extra 标签），重建 line_to_id；
+  -- 渲染全部行 + 高亮（勾选框 / 内容 / 文件名+目录 Comment 色 / Extra 标签），重建 line_to_id；
   -- 保留用户已输入的 Extra 内容（按上一轮 extra_row 从 buffer 读出，再重算行号）
   local function render()
     local prev = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -130,14 +176,14 @@ function M.show()
     end
 
     local cur = notes.list()
-    lines = {}
+    local note_lines, layouts = build_note_lines(cur)
+    lines = note_lines
     line_to_id = {}
     for i, note in ipairs(cur) do
-      lines[i] = note_line(note)
       line_to_id[i] = note.id
     end
     if #lines > 0 then
-      lines[#lines + 1] = "" -- 空行分隔（与 show() 初始渲染一致）
+      lines[#lines + 1] = "" -- 空行分隔（备注列表与 Extra Prompt）
     end
     extra_row = #lines + 1
     lines[extra_row] = kept_extra
@@ -145,20 +191,20 @@ function M.show()
 
     vim.api.nvim_buf_clear_namespace(bufnr, ns_view, 0, -1)
     for i, note in ipairs(cur) do
-      local box_end = 4 -- "[x] " / "[ ] "
-      local loc_end = box_end + #loc_label(note)
+      local lay = layouts[i]
       vim.api.nvim_buf_set_extmark(bufnr, ns_view, i - 1, 0, {
-        end_col = box_end,
+        end_col = 4, -- "[x] " / "[ ] "
         hl_group = note.checked and "HerderNoteChecked" or "HerderNoteUnchecked",
       })
-      vim.api.nvim_buf_set_extmark(bufnr, ns_view, i - 1, box_end, {
-        end_col = loc_end,
-        hl_group = "HerderNoteLoc",
-      })
-      vim.api.nvim_buf_set_extmark(bufnr, ns_view, i - 1, loc_end, {
-        end_row = i - 1,
+      if lay.content_end > 4 then
+        vim.api.nvim_buf_set_extmark(bufnr, ns_view, i - 1, 4, {
+          end_col = lay.content_end,
+          hl_group = "HerderNoteText", -- 内容：常规前景色
+        })
+      end
+      vim.api.nvim_buf_set_extmark(bufnr, ns_view, i - 1, lay.meta_start, {
         end_col = #lines[i],
-        hl_group = "HerderNoteText",
+        hl_group = "Comment", -- 文件名:行号 + 目录：Comment 色
       })
     end
     vim.api.nvim_buf_set_extmark(bufnr, ns_view, extra_row - 1, 0, {
