@@ -110,10 +110,10 @@ M.defaults = {
     -- new_session = "<leader>hc",
     -- history = "<leader>hh",
     -- switch = "<leader>ht",
-    -- read_buffer = "<leader>hr", -- 当前缓冲区加入只读附件
+    -- read_buffer = "<leader>hR", -- 当前缓冲区加入只读附件
     -- add_buffer = "<leader>ha", -- 当前缓冲区加入可编辑附件
     -- note = "<leader>hn", -- 在光标行 / 可视选区添加备注
-    -- notes_view = "<leader>hN", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
+    -- notes_view = "<leader>hr", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
     -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
     -- codex_model = "<leader>hm",
   },

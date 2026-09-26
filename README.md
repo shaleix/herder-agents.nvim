@@ -24,10 +24,9 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       new_session = "<leader>hc",
       history = "<leader>hh",
       switch = "<leader>ht",
-      read_buffer = "<leader>hr",
       add_buffer = "<leader>ha",
       note = "<leader>hn",
-      notes_view = "<leader>hN",
+      notes_view = "<leader>hr",
       switch_mode = "<leader>hM",
       codex_model = "<leader>hm",
     },
@@ -54,9 +53,9 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hc` | new session |
 | `<leader>hh` | prompt history |
 | `<leader>ht` | switch tool |
-| `<leader>hr` / `<leader>ha` | add current buffer as read-only / editable attachment |
+| `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
-| `<leader>hN` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
+| `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals`) |
 | `<leader>hm` | switch codex provider/model (codex only) |
 
@@ -80,7 +79,7 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   configurable via `icons.note`) and an
   end-of-line preview. Markers follow the code as you edit (extmark-based), so the
   note stays anchored to the right lines.
-- `<leader>hN` opens the **notes popup** (independent of the chat popup): all notes
+- `<leader>hr` opens the **notes popup** (independent of the chat popup): all notes
   listed and **checked by default** (cursor starts on the first note, normal
   mode), a blank line, then an `Extra Prompt: - ` line at the bottom (same
   buffer) for an extra instruction to send along with the notes.
