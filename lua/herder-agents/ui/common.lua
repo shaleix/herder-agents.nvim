@@ -37,29 +37,35 @@ local active_backdrop = nil
 -- 全屏遮罩：挂到指定 buffer 的生命周期上；返回 close 函数。
 -- 供本插件弹窗与外部（如 neogit）复用：
 --   require("herder-agents.ui.common").dim(bufnr)
+--
+-- 遮罩是全屏唯一的，多个弹窗（如 history -> chat 回填）会共享同一个遮罩，
+-- 用引用计数跟踪绑定的 buffer：全部关闭后才真正关闭遮罩，
+-- 避免先关的弹窗把后开弹窗的遮罩一起带走。
 M.dim = function(bufnr, events)
   local backdrop_name = "HerderAgentsBackdrop"
 
   local zindex = 50
 
   -- 挂到指定 buffer 生命周期上（once，多个绑定谁先触发都安全）
-  local function bind_buf_lifecycle(b)
+  local function bind_buf_lifecycle(b, bd)
     if b ~= nil and vim.api.nvim_buf_is_valid(b) then
+      bd.refs[b] = true
       vim.api.nvim_create_autocmd({ "BufWinLeave", "BufHidden", "BufWipeout" }, {
         buffer = b,
         once = true,
         callback = function()
-          if active_backdrop then
-            active_backdrop.close()
+          bd.refs[b] = nil
+          if next(bd.refs) == nil then
+            bd.close()
           end
         end,
       })
     end
   end
 
-  -- 遮罩是全屏唯一的，重复调用复用已有遮罩，只补绑新 buffer 的生命周期
+  -- 重复调用复用已有遮罩，只补绑新 buffer 的生命周期
   if active_backdrop then
-    bind_buf_lifecycle(bufnr)
+    bind_buf_lifecycle(bufnr, active_backdrop)
     return active_backdrop.close
   end
 
@@ -96,7 +102,7 @@ M.dim = function(bufnr, events)
     end
   end
 
-  active_backdrop = { close = close_dim }
+  active_backdrop = { close = close_dim, refs = {} }
 
   if events ~= nil then
     vim.api.nvim_create_autocmd(events, {
@@ -109,7 +115,7 @@ M.dim = function(bufnr, events)
 
   -- 把遮罩生命周期绑定到被 dim 的 buffer 上，而不是某个会变的窗口 id。
   -- 浮窗在刷新时可能被重建（窗口 id 变化），用窗口 id 匹配会导致遮罩残留。
-  bind_buf_lifecycle(bufnr)
+  bind_buf_lifecycle(bufnr, active_backdrop)
 
   return close_dim
 end
