@@ -17,25 +17,27 @@ local function fence_for(text)
   return string.rep("`", longest)
 end
 
--- 当前缓冲区的最近选区（'< '> mark）；无选区或无名缓冲区返回 nil
+-- 当前缓冲区的活动可视选区（x 模式映射回调内调用）；非可视模式 / 无名缓冲区返回 nil
+-- 注意：回调执行期间 '< '> mark 与 visualmode() 是【上一次】选区的陈旧值
+--（退出可视模式才更新，首次选区时为 0/""），当前选区必须用 'v'（锚点）+ 光标位置，
+-- 运动类型直接取 mode()（"v"/"V"/"^V" 即 getregion 的 type 值）
 function M.selection()
   local bufnr = vim.api.nvim_get_current_buf()
   local path = vim.api.nvim_buf_get_name(bufnr)
   if path == "" then
     return nil
   end
-  local start_pos = vim.fn.getpos("'<")
-  local end_pos = vim.fn.getpos("'>")
+  local mode = vim.api.nvim_get_mode().mode
+  if not mode:match("[vV\22]") then
+    return nil -- 'v' 锚点只在活动可视选区内可靠
+  end
+  local start_pos = vim.fn.getpos("v")
+  local end_pos = vim.fn.getcurpos()
   local start_line, end_line = start_pos[2], end_pos[2]
   if start_line < 1 or end_line < 1 then
     return nil
   end
-  local regtype = vim.fn.visualmode()
-  if regtype == "" then
-    -- 无可视模式历史（如 headless）：按行选取兜底
-    regtype = "V"
-  end
-  local ok, lines = pcall(vim.fn.getregion, start_pos, end_pos, { type = regtype })
+  local ok, lines = pcall(vim.fn.getregion, start_pos, end_pos, { type = mode })
   if not ok or not lines or #lines == 0 then
     return nil
   end
@@ -90,7 +92,7 @@ end
 
 -- 当前备注位置：可视模式取选区起止行，普通模式取光标行；
 -- 无名缓冲区返回 nil。返回 { path, rel, bufnr, start_line, end_line }
--- 选区行号沿用 selection() 的 '< '> mark 方式，与本插件既有行为一致
+-- 可视选区用 'v'（锚点）+ 光标行获取——x 模式映射回调期间 '< '> 是上一次的陈旧 mark
 function M.note_range()
   local bufnr = vim.api.nvim_get_current_buf()
   local path = vim.api.nvim_buf_get_name(bufnr)
@@ -100,10 +102,10 @@ function M.note_range()
   local start_line, end_line
   local mode = vim.api.nvim_get_mode().mode
   if mode:match("[vV\22]") then
-    local s = vim.fn.getpos("'<")[2]
-    local e = vim.fn.getpos("'>")[2]
-    if s >= 1 and e >= 1 then
-      start_line, end_line = math.min(s, e), math.max(s, e)
+    local anchor = vim.fn.getpos("v")[2]
+    local cur = vim.api.nvim_win_get_cursor(0)[1]
+    if anchor >= 1 and cur >= 1 then
+      start_line, end_line = math.min(anchor, cur), math.max(anchor, cur)
     end
   end
   if not start_line then
