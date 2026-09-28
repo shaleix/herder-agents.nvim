@@ -229,27 +229,32 @@ local function launch(pane_id, session_id, provider, model)
   end
   -- /quit 退出后 shell 上可能残留半行输入（kitty 键盘协议残留字符），先清行
   chat.herdr_exec("pane", "send-keys", pane_id, "ctrl+c")
-  local args = { "herdr", "pane", "run", pane_id }
-  vim.list_extend(args, restart_args(session_id, provider, model))
-  vim.fn.system(args)
-  -- 就绪判断同样用进程级信息：新 codex 进程的 argv 里带上了目标 model 才算成功，
-  -- 避免 agent 检测残留（旧实例退出后 pane.agent 短期内仍为 codex）造成假成功
-  poll(
-    function()
-      local proc = codex_foreground(pane_id)
-      return proc ~= nil and proc.argv ~= nil and vim.tbl_contains(proc.argv, model)
-    end,
-    500,
-    60,
-    function(ok)
-      local target = provider .. " / " .. model
-      if ok then
-        utils.info("codex 已切换到 " .. target .. (session_id and " 并恢复会话" or ""))
-      else
-        utils.warn("重启命令已发送，但未能确认 codex 就绪，请检查 pane")
+  -- codex 退出后其 TUI 清场还会迟到输出一段特殊字符到 shell 输入行，立即 run
+  -- 会把 resume 命令拼在残留字符后面导致重启失效；稍等一拍再补一次 ctrl+c 清行
+  vim.defer_fn(function()
+    chat.herdr_exec("pane", "send-keys", pane_id, "ctrl+c")
+    local args = { "herdr", "pane", "run", pane_id }
+    vim.list_extend(args, restart_args(session_id, provider, model))
+    vim.fn.system(args)
+    -- 就绪判断同样用进程级信息：新 codex 进程的 argv 里带上了目标 model 才算成功，
+    -- 避免 agent 检测残留（旧实例退出后 pane.agent 短期内仍为 codex）造成假成功
+    poll(
+      function()
+        local proc = codex_foreground(pane_id)
+        return proc ~= nil and proc.argv ~= nil and vim.tbl_contains(proc.argv, model)
+      end,
+      500,
+      60,
+      function(ok)
+        local target = provider .. " / " .. model
+        if ok then
+          utils.info("codex 已切换到 " .. target .. (session_id and " 并恢复会话" or ""))
+        else
+          utils.warn("重启命令已发送，但未能确认 codex 就绪，请检查 pane")
+        end
       end
-    end
-  )
+    )
+  end, 300)
 end
 
 local function agent_gone(pane_id)

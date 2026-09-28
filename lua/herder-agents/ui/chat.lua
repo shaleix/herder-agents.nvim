@@ -1094,7 +1094,8 @@ end
 -- 切换 agent（类似 codex model 切换的"退出 → 同 pane 重启"流程）：
 -- 1. 新工具已有 pane → 直接关闭旧工具 pane（herdr 会一并结束其进程）
 -- 2. 否则优雅退出旧 pane 的 agent（TERM 前台进程组，卡住则 KILL），
---    pane 回到 shell 后在同一 pane 启动新工具并改名（herdr 布局原位保持）
+--    pane 回到 shell 后再补发 ctrl+c 清掉迟到的 TUI 清场残留，
+--    在同一 pane 启动新工具并改名（herdr 布局原位保持）
 -- 3. 旧工具无 pane → 新工具也无 pane 时按 split 流程新建（同 toggle）
 function M.replace_tool(old_name, new_name)
   if vim.env.HERDR_ENV ~= "1" then
@@ -1124,22 +1125,28 @@ function M.replace_tool(old_name, new_name)
 
   local function launch_new()
     herdr_cli("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
-    herdr_cli("pane", "run", pane_id, new_cmd)
-    herdr_cli("pane", "rename", pane_id, new_name)
-    poll(
-      function()
-        return pane_agent_running(pane_id) == true
-      end,
-      400,
-      40,
-      function(ok)
-        if ok then
-          utils.info("已切换到 " .. new_name)
-        else
-          utils.warn("启动命令已发送，但未能确认 " .. new_name .. " 就绪，请检查 pane")
+    -- 旧 agent（如 codex）进程退出后，其 TUI 清场仍可能迟到向 pane 输出一段特殊
+    -- 字符，第一次 ctrl+c 赶在它们落进 shell 输入行之前；稍等一拍再补一次 ctrl+c
+    -- 兜底清行，避免启动命令拼在残留字符后面导致新 agent 起不来
+    vim.defer_fn(function()
+      herdr_cli("pane", "send-keys", pane_id, "ctrl+c")
+      herdr_cli("pane", "run", pane_id, new_cmd)
+      herdr_cli("pane", "rename", pane_id, new_name)
+      poll(
+        function()
+          return pane_agent_running(pane_id) == true
+        end,
+        400,
+        40,
+        function(ok)
+          if ok then
+            utils.info("已切换到 " .. new_name)
+          else
+            utils.warn("启动命令已发送，但未能确认 " .. new_name .. " 就绪，请检查 pane")
+          end
         end
-      end
-    )
+      )
+    end, 300)
   end
 
   local running, fgid = pane_agent_running(pane_id)
