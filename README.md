@@ -85,6 +85,8 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   mode), a blank line, then an `Extra Prompt: - ` line at the bottom (same
   buffer) for an extra instruction to send along with the notes.
   `<Space>`/`x` toggles a note · `dd` deletes it · `q`/`Esc` closes.
+  After a successful submit, the sent (checked) notes are removed automatically
+  (buffer markers included); unchecked notes stay for later.
 - Two ways to submit:
   - `<CR>` — **send now**: text goes to the agent pane followed by Enter.
   - `<C-a>` — **append only**: the same text lands in the agent's input box

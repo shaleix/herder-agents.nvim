@@ -240,6 +240,11 @@ function M.show()
       ok = chat.append_tool_prompt(name, text)
     end
     if ok then
+      -- 提交成功后自动删除已发送（勾选）的备注（含源 buffer 的 ✎ extmark）；
+      -- 未勾选的保留，供下次提交
+      for _, note in ipairs(notes.checked()) do
+        notes.remove(note.id)
+      end
       close()
     end
   end
