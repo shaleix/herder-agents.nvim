@@ -89,6 +89,8 @@ M.defaults = {
   notes = {
     -- 行尾虚拟文本预览的最大显示宽度（字符数，超出截断为 …）
     preview_width = 40,
+    -- 提交给 agent 的注释块标题：用指令句明确"这些 review 注释需要修改"
+    submit_header = "Please address these code review comments:",
   },
 
   -- codex provider/model 切换（<leader>hm）

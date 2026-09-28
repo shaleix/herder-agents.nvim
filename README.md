@@ -91,10 +91,12 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   - `<CR>` — **send now**: text goes to the agent pane followed by Enter.
   - `<C-a>` — **append only**: the same text lands in the agent's input box
     *without* Enter, so you can keep editing there and submit manually.
-- Submitted text (extra prompt becomes a final `- ` bullet):
+- Submitted text — the header tells the agent these are review comments to act
+  on (customizable via `notes.submit_header`), and the extra prompt becomes a
+  final `- ` bullet:
 
   ```
-  Notes:
+  Please address these code review comments:
   - @src/foo.lua (line 70): handle the nil case
   - @src/foo.lua (lines 10-20): check the edge cases
   - <extra prompt>
@@ -127,7 +129,10 @@ opts = {
   switch_replace = true, -- switching tools closes the old agent & restarts the new one in its pane
   codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
   icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
-  notes = { preview_width = 40 }, -- end-of-line note preview width
+  notes = {
+    preview_width = 40, -- end-of-line note preview width
+    submit_header = "Please address these code review comments:", -- header of the block sent to the agent
+  },
 }
 ```
 

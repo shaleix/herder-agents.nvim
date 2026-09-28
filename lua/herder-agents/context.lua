@@ -66,13 +66,15 @@ function M.files_block(files)
   return table.concat(lines, "\n")
 end
 
--- 勾选的备注 → "Notes:" 块；空列表返回 nil
+-- 勾选的备注 → review 注释块；空列表返回 nil
+-- 标题用指令句（告诉 agent 这是需要修改的 review 注释），可用 notes.submit_header 自定义；
 -- 每条格式：`- @相对路径 (line N): 内容` 或 `(lines A-B): 内容`（多行内容压成单行）
 function M.notes_block(note_list)
   if not note_list or #note_list == 0 then
     return nil
   end
-  local lines = { "Notes:" }
+  local notes_cfg = require("herder-agents.config").options.notes or {}
+  local lines = { notes_cfg.submit_header or "Please address these code review comments:" }
   for _, note in ipairs(note_list) do
     local loc
     if note.start_line == note.end_line then

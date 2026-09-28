@@ -141,7 +141,10 @@ local ordered = notes.list()
 check(ordered[1].id == n1.id and ordered[2].id == n2.id, "list() 按起始行排序")
 -- notes_block：只含勾选备注，多行压成单行，含位置
 local block = context.notes_block(notes.checked())
-check(block ~= nil and block:match("^Notes:") ~= nil, "notes_block 以 Notes: 开头")
+check(
+  block ~= nil and block:match("^Please address these code review comments:") ~= nil,
+  "notes_block 以指令式标题开头"
+)
 check(block:find("(lines 4-6)", 1, true) ~= nil, "notes_block 含多行位置")
 check(block:find("second note", 1, true) ~= nil, "notes_block 多行内容压成单行")
 check(block:find("first note", 1, true) == nil, "notes_block 不含未勾选备注")
