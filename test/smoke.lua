@@ -36,6 +36,7 @@ plugin.setup({
     read_buffer = "<leader>hr",
     add_buffer = "<leader>ha",
     note = "<leader>hn",
+    line_prompt = "<leader>hp",
     notes_view = "<leader>hN",
     switch_mode = "<leader>hM",
     codex_model = "<leader>hm",
@@ -53,6 +54,8 @@ check(has_map(" hr", "n"), "<leader>hr 已注册")
 check(has_map(" ha", "n"), "<leader>ha 已注册")
 check(has_map(" hn", "n"), "<leader>hn (n) 已注册")
 check(has_map(" hn", "x"), "<leader>hn (x) 已注册")
+check(has_map(" hp", "n"), "<leader>hp (n) 已注册")
+check(has_map(" hp", "x"), "<leader>hp (x) 已注册")
 check(has_map(" hN", "n"), "<leader>hN (n) 已注册")
 check(has_map(" hM", "n"), "<leader>hM (n) 已注册")
 check(has_map(" hM", "x"), "<leader>hM (x) 已注册")
@@ -103,6 +106,7 @@ for _, fn in ipairs({
   "read_buffer",
   "add_buffer",
   "add_note",
+  "add_prompt",
   "notes_view",
   "switch_mode",
   "switch_model",

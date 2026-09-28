@@ -524,21 +524,27 @@ local function note_loc_label(range)
   return string.format("%s:%d-%d", range.rel, range.start_line, range.end_line)
 end
 
--- 备注内联输入：不再用覆盖内容的弹窗，而是在标注行下方"撑开"一道缝隙：
+-- 内联输入缝隙（note / 行级 prompt 共用 UI）：在目标行下方"撑开"一道缝隙，不覆盖内容：
 -- - extmark virt_lines 在锚点行（普通=光标行，可视=选区末行）下方插入虚行，
 --   后续内容整体下移；虚拟行无行号、不修改 buffer（不进 undo、不置 modified）
 -- - 细线边框输入浮窗用 bufpos 锚定到 buffer 文本坐标（锚点行，第 0 列）：
 --   左侧自动与代码内容区对齐（number/sign 列宽自适应），且跟随文本滚动，
 --   与同样跟随 buffer 的 virt_lines 缝隙始终严丝合缝
--- - 边框左上为 icon+note 标题、右下为快捷键提示（原生 title/footer），内容背景与 buffer 一致
--- - <C-Enter> 保存（与 Chat 弹窗提交键统一）；<Esc>/q 取消；关闭时缝隙收回，内容弹回原位
+-- - 边框左上为标题、右下为快捷键提示（原生 title/footer），内容背景与 buffer 一致
+-- - <C-Enter> 提交（与 Chat 弹窗提交键统一）；<Esc>/q 取消；关闭时缝隙收回，内容弹回原位
+--
+-- opts 字段：
+--   title    边框左上标题文本（自动加 icon 前缀；缺省 "note "）
+--   footer   边框右下快捷键提示（缺省 " C-Enter: save · Esc: cancel "）
+--   prefill  预填内容（光标到末行行尾进入插入；缺省空白）
+--   on_save  fun(text):boolean|nil —— 返回 false 表示提交失败，保留缝隙与内容供重试
 local NOTE_INPUT_NS = vim.api.nvim_create_namespace("herder_agents_note_input")
 local NOTE_INPUT_ROWS = 2 -- 输入内容区高度
 local NOTE_GAP_ROWS = NOTE_INPUT_ROWS + 2 -- 虚行缝隙总高（内容 + 上下边框各 1 行）
 
-local function add_note_inline(range)
+local function inline_input_gap(range, opts)
+  opts = opts or {}
   local Popup = require("nui.popup")
-  local loc = note_loc_label(range)
   local src_win = vim.api.nvim_get_current_win()
   local src_buf = range.bufnr
   local anchor_line = range.end_line
@@ -580,10 +586,6 @@ local function add_note_inline(range)
     end
   end
 
-  -- 同一位置已有备注：预填其内容进入编辑（保存时原地更新，不重复新建）
-  notes.sync_positions()
-  local existing = notes.find(range.path, range.start_line, range.end_line)
-
   -- 细线边框输入浮窗：bufpos 锚定 buffer 文本坐标（锚点行、第 0 列，0-based），
   -- position 为相对该文本位置的偏移：row=1 → 外框顶线 = 锚点行下一行（缝隙第 1 行）。
   -- 原生边框的 row/col 定位【外框】（含边框）左上角，内容区自动内缩 1 行/列。
@@ -602,13 +604,13 @@ local function add_note_inline(range)
     },
   })
 
-  -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+note（编辑态注明 edit），右下快捷键提示
+  -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+标题，右下快捷键提示
   local icon = (config.options.icons and config.options.icons.note) or ""
   popup.win_config.title = {
-    { " " .. (icon ~= "" and (icon .. " ") or "") .. (existing and "edit note " or "note "), "FloatTitle" },
+    { " " .. (icon ~= "" and (icon .. " ") or "") .. (opts.title or "note "), "FloatTitle" },
   }
   popup.win_config.title_pos = "left"
-  popup.win_config.footer = { { " C-Enter: save · Esc: cancel ", "FloatTitle" } }
+  popup.win_config.footer = { { opts.footer or " C-Enter: save · Esc: cancel ", "FloatTitle" } }
   popup.win_config.footer_pos = "right"
 
   -- 兜底：浮窗 buffer 被任何途径销毁时收回缝隙，防止虚行残留
@@ -632,18 +634,14 @@ local function add_note_inline(range)
     local lines = vim.api.nvim_buf_get_lines(popup.bufnr, 0, -1, false)
     local text = vim.trim(table.concat(lines, "\n"))
     if text == "" then
-      utils.warn("Note is empty, skip")
+      utils.warn("Input is empty, skip")
+      return
+    end
+    -- on_save 返回 false = 提交失败（如 agent pane 不在）：保留缝隙与内容供重试
+    if opts.on_save and opts.on_save(text) == false then
       return
     end
     close()
-    if existing and notes.get(existing.id) then
-      -- 编辑已有备注：原地更新文本并重渲染 sign/行尾预览（不新建重复条目）
-      notes.set_text(existing.id, text)
-      utils.info("Note updated @ " .. loc)
-    else
-      notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
-      utils.info("Note added @ " .. loc)
-    end
   end
 
   popup:map("n", "<C-Enter>", save, mapOpts)
@@ -655,9 +653,9 @@ local function add_note_inline(range)
   popup:map("i", "<C-q>", close, mapOpts)
 
   popup:mount()
-  if existing then
-    -- 编辑态：预填已有备注内容，光标到末行，排入裸 "A"（行尾进入插入，utf8 安全）
-    local pre = vim.split(existing.text, "\n", { plain = true })
+  if opts.prefill and opts.prefill ~= "" then
+    -- 预填态（如编辑已有备注）：光标到末行，排入裸 "A"（行尾进入插入，utf8 安全）
+    local pre = vim.split(opts.prefill, "\n", { plain = true })
     vim.api.nvim_buf_set_lines(popup.bufnr, 0, -1, false, pre)
     pcall(vim.api.nvim_win_set_cursor, popup.winid, { #pre, 0 })
     vim.api.nvim_feedkeys("A", "m", false)
@@ -668,6 +666,27 @@ local function add_note_inline(range)
   end
 end
 
+-- 备注输入：同一位置已有备注时预填进入编辑（保存时原地更新，不重复新建）
+local function add_note_inline(range)
+  local loc = note_loc_label(range)
+  notes.sync_positions()
+  local existing = notes.find(range.path, range.start_line, range.end_line)
+  inline_input_gap(range, {
+    title = existing and "edit note " or "note ",
+    prefill = existing and existing.text or nil,
+    on_save = function(text)
+      if existing and notes.get(existing.id) then
+        -- 编辑已有备注：原地更新文本并重渲染 sign/行尾预览（不新建重复条目）
+        notes.set_text(existing.id, text)
+        utils.info("Note updated @ " .. loc)
+      else
+        notes.add(range.path, range.start_line, range.end_line, text, range.bufnr)
+        utils.info("Note added @ " .. loc)
+      end
+    end,
+  })
+end
+
 -- 公开入口：在指定位置添加备注（init.M.add_note 调用，range 见 context.note_range）
 function M.add_note(range)
   if not range then
@@ -675,6 +694,38 @@ function M.add_note(range)
     return
   end
   add_note_inline(range)
+end
+
+-- 行级 prompt 直发（init.M.add_prompt 调用）：与 add_note 完全相同的内联缝隙 UI，
+-- 但 <C-Enter> 不入备注 store，而是把 "prompt + 目标行定位" 立即发给当前 agent：
+--   <prompt>
+--
+--   Target: @rel (line N) / (lines A-B)
+-- @ 引用让 agent 直接读到文件；发送失败（pane 不在）时缝隙保留可重试
+function M.add_prompt(range)
+  if not range then
+    utils.warn("No location to annotate")
+    return
+  end
+  local loc = note_loc_label(range)
+  inline_input_gap(range, {
+    title = "prompt ",
+    footer = " C-Enter: send · Esc: cancel ",
+    on_save = function(text)
+      local name = vim.g.ai_tool or config.options.default_tool
+      local target
+      if range.start_line == range.end_line then
+        target = string.format("Target: @%s (line %d)", range.rel, range.start_line)
+      else
+        target = string.format("Target: @%s (lines %d-%d)", range.rel, range.start_line, range.end_line)
+      end
+      if M.send_tool_prompt(name, text .. "\n\n" .. target) then
+        utils.info("Prompt sent → " .. name .. " @ " .. loc)
+        return true
+      end
+      return false
+    end,
+  })
 end
 
 local function session_files()

@@ -174,6 +174,11 @@ setup_keymaps = function()
     M.add_note()
   end, "AI add note at cursor/selection")
 
+  -- 行级 prompt 直发：同款内联输入框，C-Enter 立即发给当前 agent
+  map("line_prompt", { "n", "x" }, function()
+    M.add_prompt()
+  end, "AI send prompt at cursor/selection")
+
   -- Notes 审阅/提交弹窗
   map("notes_view", { "n", "x" }, function()
     M.notes_view()
@@ -339,6 +344,22 @@ function M.add_note()
     return
   end
   require("herder-agents.ui.chat").add_note(range)
+end
+
+-- 行级 prompt 直发（普通模式=光标行，可视模式=选区行范围）：
+-- 与 add_note 相同的内联缝隙输入框，但 <C-Enter> 把 "prompt + Target: @文件 (行)"
+-- 立即发送给当前 agent（不进入备注 store）
+function M.add_prompt()
+  if vim.bo.buftype ~= "" then
+    require("herder-agents.utils").warn("Cannot annotate a special buffer")
+    return
+  end
+  local range = require("herder-agents.context").note_range()
+  if not range then
+    require("herder-agents.utils").warn("No file to annotate")
+    return
+  end
+  require("herder-agents.ui.chat").add_prompt(range)
 end
 
 -- Notes 审阅/提交弹窗（独立于 Chat）：默认全选，可勾选/删除，

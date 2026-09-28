@@ -26,6 +26,7 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       switch = "<leader>ht",
       add_buffer = "<leader>ha",
       note = "<leader>hn",
+      line_prompt = "<leader>hp",
       notes_view = "<leader>hr",
       switch_mode = "<leader>hM",
       codex_model = "<leader>hm",
@@ -55,6 +56,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first) |
 | `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
+| `<leader>hp` | inline prompt at the cursor line / selection — `Ctrl+Enter` sends it straight to the agent with a `Target: @file (line N)` locator |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals` + focus jump) |
 | `<leader>hm` | switch model — codex: provider/model picker + session resume; opencode v2: opens the in-pane model dialog (`ctrl+x m`) and jumps herdr focus to the pane; other tools via `model_switch` config |
@@ -76,6 +78,11 @@ Annotate code inline, then review and send the annotations from a dedicated popu
   cancels; the gap collapses either way. Triggering on a position that already
   has a note re-opens it **prefilled for editing** (`󰆈 edit note` title) — saving
   updates it in place instead of adding a duplicate.
+- `<leader>hp` reuses the **same inline input box** for one-off instructions:
+  type a prompt at the cursor line (or visual selection) and press `Ctrl+Enter` —
+  it goes straight to the current agent as `<prompt>` + a `Target: @file (line N)`
+  locator. Nothing is stored; if the agent pane is missing the box stays open for
+  a retry.
 - Each note is marked in the source buffer with a gutter sign (comment bubble,
   configurable via `icons.note`) and an
   end-of-line preview. Markers follow the code as you edit (extmark-based), so the
