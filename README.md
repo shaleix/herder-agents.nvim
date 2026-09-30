@@ -120,18 +120,30 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 ## Prompt delivery
 
 Prompts travel through a small delivery queue modeled after codex.nvim's
-`pending_sends` design:
+`pending_sends` design, preferring herdr's own agent integration (usage
+borrowed from herdr-nvim):
 
-- A prompt is sent only when the agent process is in the pane's foreground
-  (`herdr pane process-info`), re-checked after a short settle delay that skips
-  the TUI initialization window — including prompts submitted while the agent
-  already looks ready. Until then it is queued and delivered automatically once
-  the agent is up. Startup screens no longer eat your text.
+- When the target pane is a herdr-registered agent, submission goes through
+  `herdr agent prompt`: the server presses Enter for you, understands the
+  agent state machine, and refuses when the agent is blocked. Waiting uses
+  `herdr agent wait --until idle/working` (server-side, chunked timeouts)
+  instead of client-side polling.
+- Unregistered panes and custom tools fall back to the text channel:
+  `pane send-text` with per-tool bracketed-paste encoding plus a submit key.
+  codex `/queue` (tab submit) and append-only sends always use the text
+  channel. Set `delivery.agent_channel = false` to force the text channel
+  everywhere.
+- A prompt is sent only once its pane is ready (agent status `idle`/`working`,
+  or a foreground process for the text channel), re-checked after a short
+  settle delay that skips the TUI initialization window — including prompts
+  submitted while the agent already looks ready. Until then it is queued and
+  delivered automatically once the agent is up. Startup screens no longer eat
+  your text.
 - While prompts are queued (or settling), readiness polling spawns a
   short-lived `herdr` subprocess per tick (`delivery.poll_interval_ms`).
 - Delivery success is judged by the `herdr` CLI exit code. A failed
-  `send-text` no longer reports success: the chat-popup draft, the inline
-  prompt gap, and the notes are kept for retry.
+  `send-text`/`agent prompt` no longer reports success: the chat-popup draft,
+  the inline prompt gap, and the notes are kept for retry.
 - Long waits warn once (`delivery.warn_after_ms`) but keep waiting;
   `:AIDropQueue` drops everything queued; queues are dropped automatically
   when the pane disappears.
@@ -155,8 +167,8 @@ User autocmds (payloads in `event.data`):
 | --- | --- | --- |
 | `AIPromptQueued` | a prompt enters the queue | tool, pane_id, pending |
 | `AIPromptSent` | a prompt was delivered | tool, pane_id, submitted, queued |
-| `AIDeliveryFailed` | delivery failed / queue dropped | tool, pane_id, queued |
-| `AIAgentWorking` / `AIAgentIdle` / `AIAgentBlocked` | agent status change (needs `status_poll.enabled = true`) | tool, pane_id, status |
+| `AIDeliveryFailed` | delivery failed / queue dropped | tool, pane_id, queued, reason |
+| `AIAgentWorking` / `AIAgentIdle` / `AIAgentBlocked` | agent status change (needs `status_poll.enabled = true`) | tool, pane_id, status, cwd |
 
 Example: react when the agent finishes (opt-in poller):
 
@@ -189,9 +201,15 @@ opts = {
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
   switch_replace = true, -- switching tools closes the old agent & restarts the new one in its pane
-  -- prompt delivery queue (see "Prompt delivery"); enabled = false restores
-  -- fire-and-forget sending (exit-code checks stay)
-  delivery = { poll_interval_ms = 300, settle_ms = 300, warn_after_ms = 5000 },
+  -- prompt delivery queue (see "Prompt delivery"); agent_channel = false
+  -- forces the plain send-text path; enabled = false restores fire-and-forget
+  -- sending (exit-code checks stay)
+  delivery = {
+    agent_channel = true,
+    poll_interval_ms = 300,
+    settle_ms = 300,
+    warn_after_ms = 5000,
+  },
   -- selection context limits: rejected beyond, never truncated
   context = { max_lines = 500, max_bytes = 65536 },
   -- opt-in agent status poller -> AIAgentWorking/Idle/Blocked events

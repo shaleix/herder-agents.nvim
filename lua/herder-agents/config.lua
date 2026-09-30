@@ -105,18 +105,24 @@ M.defaults = {
     },
   },
 
-  -- prompt 投递（借鉴 codex.nvim terminal.lua 的 pending_sends / composer-ready 机制）：
-  -- agent 进程未就绪（pane 刚分出还在 shell、TUI 启动中）时排队，就绪后自动投递；
+  -- prompt 投递（借鉴 codex.nvim terminal.lua 的 pending_sends / composer-ready 机制，
+  -- 并优先使用 herdr 的 agent 集成原语，见 herdr-nvim 的用法）：
+  -- - 提交：herdr agent prompt（服务端按回车、理解状态机、blocked 拒绝）
+  -- - 等待：herdr agent wait --until idle/working（状态机精确等待）
+  -- 仅对 herdr 已注册的 agent pane 生效；自定义工具 / 未注册 pane / codex /queue
+  --（tab 提交）/ append-only 回退到 pane send-text + bracketed paste 旧路径。
+  -- agent 未就绪（pane 刚分出还在 shell、TUI 启动中）时排队，就绪后自动投递；
   -- 投递成败以 herdr CLI 退出码判定，失败保留草稿
   delivery = {
     enabled = true,
-    poll_interval_ms = 300, -- 就绪轮询间隔
-    settle_ms = 300, -- 进程就绪后的稳定等待，避开 TUI 初始化窗口
+    -- 提交优先走 herdr agent 集成（agent prompt / agent wait）；置 false 则
+    -- 全部走 send-text 旧路径（escape hatch，不影响排队与退出码判定）
+    agent_channel = true,
+    poll_interval_ms = 300, -- 文本通道的就绪轮询间隔
+    settle_ms = 300, -- 就绪后的稳定等待，避开 TUI 初始化窗口
     warn_after_ms = 5000, -- 排队超过该时长提醒一次（不丢弃，持续等待）
     pane_gone_retries = 3, -- process-info 连续失败次数 → 判定 pane 已关闭，丢弃队列
-    -- 额外要求 herdr 的 agent 集成已识别出 agent 状态（agent_status 非空）才算就绪；
-    -- 更保守（herdr 检测有秒级延迟，启动会更慢），默认关闭
-    require_agent_status = false,
+    agent_wait_chunk_ms = 2000, -- agent wait 分段超时（服务端等待的轮询粒度）
   },
 
   -- 发送给 agent 的选区上下文上限（借鉴 codex.nvim：超限拒绝而非静默截断）

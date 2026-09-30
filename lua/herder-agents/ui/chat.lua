@@ -826,9 +826,9 @@ local function toggle_cli_in_herdr_pane(cmd, label)
     local layout = herdr_cli("pane", "layout", "--current")
     local zoomed = layout and layout.result and layout.result.layout and layout.result.layout.zoomed
     if zoomed then
-      vim.fn.system({ "herdr", "pane", "zoom", "--off", "--current" })
+      utils.herdr_ok("pane", "zoom", "--off", "--current")
     else
-      vim.fn.system({ "herdr", "pane", "zoom", "--on", "--pane", current_pane.pane_id })
+      utils.herdr_ok("pane", "zoom", "--on", "--pane", current_pane.pane_id)
     end
     return
   end
@@ -850,14 +850,14 @@ local function toggle_cli_in_herdr_pane(cmd, label)
     utils.err("herdr pane split failed")
     return
   end
-  local args = { "herdr", "pane", "run", pane_id }
+  local args = { "pane", "run", pane_id }
   for _, part in ipairs(vim.split(cmd, " ", { plain = true })) do
     if part ~= "" then
       table.insert(args, part)
     end
   end
-  vim.fn.system(args)
-  vim.fn.system({ "herdr", "pane", "rename", pane_id, label })
+  utils.herdr_ok(table.unpack(args))
+  utils.herdr_ok("pane", "rename", pane_id, label)
 end
 
 local function cli_pane(name)
@@ -878,30 +878,19 @@ local function herdr_cli_toggle(name, cmd)
   toggle_cli_in_herdr_pane(cmd or name, name)
 end
 
--- bracketed paste 编码（参考 codex.nvim terminal._encode）：
--- 多行文本用 ESC[200~...ESC[201~ 包裹，防止换行被 TUI 逐行当作回车提交；
--- 单行提交同样包裹，规避 codex 的 typing-burst 检测吞掉紧随其后的 enter/tab。
--- 文本结尾处于 @文件 / $技能 补全态时，enter 只会确认补全而不提交，
--- 补一个空格结束 token 让补全关闭（渲染上不可见）；
--- 之前是在末尾补换行把光标顶出补全项，但换行会留在消息里，提交后尾部多出一个空行。
--- 同时归一化换行、清 NUL，并把文本内伪造的粘贴结束符降级为字面量（注入防护）
-local function bracketed_paste_encode(text)
-  text = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("%z", "")
-  text = text:gsub("\27%[201~", "[201~")
-  if text:match("[@%$][%w%-%._/:]*$") then
-    text = text .. " "
-  end
-  return "\27[200~" .. text .. "\27[201~"
-end
+-- bracketed paste 编码已移至 utils.bracketed_paste_encode（delivery 文本通道共用；
+-- agent prompt 通道原文直传，不编码 —— 服务端自行处理输入注入）
 
--- 编码（paste_wrap）后经 delivery 投递（借鉴 codex.nvim pending_sends）：入队后
--- 等就绪（settle 复检）自动发送；成败以 herdr 退出码判定，结果经
--- on_done(ok, queued) 异步回调告知，不再出现 send-text 失败仍报成功的假成功
+-- 投递入口：【原文】传给 delivery（借鉴 codex.nvim pending_sends）—— 通道判定后
+-- 由 delivery 决定是否编码：agent prompt 通道原文直传，文本通道按 tool.paste_wrap
+-- 做 bracketed paste。未就绪时排队；成败以 herdr 退出码判定，
+-- 结果经 on_done(ok, queued) 回调告知，不再出现 send-text 失败仍报成功的假成功
 local function deliver_prompt(name, pane_id, tool, text, submit_key, on_done)
-  if tool.paste_wrap then
-    text = bracketed_paste_encode(text)
-  end
-  return delivery.deliver(pane_id, name, text, { submit_key = submit_key, on_done = on_done })
+  return delivery.deliver(pane_id, name, text, {
+    submit_key = submit_key,
+    on_done = on_done,
+    paste_wrap = tool.paste_wrap == true,
+  })
 end
 
 -- codex 专用 "/queue <任务>"：提交时去掉前缀，最后一个按键为 tab 而非 enter，
@@ -1061,8 +1050,7 @@ local function send_tool_directive(name, spec, what)
   else
     for _, key in ipairs(spec.keys) do
       -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
-      vim.fn.system({ "herdr", "pane", "send-keys", pane.pane_id, key })
-      if vim.v.shell_error ~= 0 then
+      if not utils.herdr_ok("pane", "send-keys", pane.pane_id, key) then
         utils.err(what .. " key rejected by herdr: " .. tostring(key))
         return false
       end
