@@ -16,7 +16,8 @@ M.defaults = {
   --   cmd           pane 启动命令（默认与 name 相同）
   --   title         prompt 输入弹窗标题
   --   paste_wrap    发送文本用 bracketed paste 包裹（TUI 支持时开启，防多行被逐行提交）
-  --   interrupt_key 中断按键（默认 ctrl+c）
+  --   interrupt_key 中断按键（默认 ctrl+c）；可为 table 表示多键序列，
+  --                 逐键间隔发送（如 opencode 的 { "esc", "esc" } 两段式中断）
   --   new_cmd       新会话命令（默认 /clear；codex/opencode 的会话重置命令是 /new）
   --   mode_switch   agent 模式切换（<leader>hM 经 herdr 发送，不同 agent 不同指令）：
   --                   { keys = { "shift+tab" } } 发逻辑按键（herdr pane send-keys）
@@ -29,11 +30,14 @@ M.defaults = {
   --                 格式同 mode_switch。示例：
   --                   opencode v2 = { keys = { "ctrl+x", "m" }, focus = true } -- 模型选择对话框
   --                   快捷循环最近模型 = { keys = { "f2" } }                    -- model.cycle_recent
-  tools = { -- opencode: 与 omp 一样用 Esc 中断运行中的 agent；ctrl+c 只会清空输入框（双击则退出）
+  tools = { -- opencode: 与 omp 一样用 Esc 中断；ctrl+c 只会清空输入框（双击则退出）。
+    -- opencode TUI 的中断是两段式：第一次 Esc 进入待确认态（提示 "ESC again to
+    -- interrupt"），第二次 Esc 才真正中断，故默认序列发送两个 esc（单键即中断的
+    -- 版本多发一个也无害：中断后 session_interrupt 失效，Esc 只会关弹层）
     opencode = {
       title = " OpenCode Chat ",
       paste_wrap = true,
-      interrupt_key = "esc",
+      interrupt_key = { "esc", "esc" },
       new_cmd = "/new",
       -- opencode v2：agent.cycle 默认 shift+tab（循环 build/plan）；v2 里 tab 是补全键！
       -- v1 时代的 agent_cycle 才是 tab，用 v1 的话改成 { keys = { "tab" } }

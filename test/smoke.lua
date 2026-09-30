@@ -487,6 +487,54 @@ else
 end
 status_mod._reset()
 
+-- ---------------------------------------------------------------------------
+-- 中断按键序列：opencode 两段式 Esc（第一次 Esc 只进入 "ESC again to interrupt"
+-- 待确认态，第二次才真正中断），第二键经 defer 间隔发送；单键工具不受影响
+-- ---------------------------------------------------------------------------
+local chat_mod = require("herder-agents.ui.chat")
+local fake_panes = {
+  { label = "opencode", tab_id = "t1", pane_id = "p-oc" },
+  { label = "omp", tab_id = "t1", pane_id = "p-omp" },
+}
+local send_keys_log = {}
+utils.set_exec(function(argv)
+  table.insert(argv_log, argv)
+  if argv[2] == "pane" and argv[3] == "current" then
+    return { code = 0, stdout = vim.json.encode({ result = { pane = { tab_id = "t1" } } }) }
+  end
+  if argv[2] == "pane" and argv[3] == "list" then
+    return { code = 0, stdout = vim.json.encode({ result = { panes = fake_panes } }) }
+  end
+  if argv[2] == "pane" and argv[3] == "send-keys" then
+    table.insert(send_keys_log, { pane_id = argv[4], key = argv[5] })
+  end
+  return { code = 0, stdout = "" }
+end)
+utils.set_exec_async(function(argv, on_done)
+  on_done({ code = 0, stdout = "", stderr = "" })
+end)
+
+chat_mod.interrupt_tool("opencode")
+check(#send_keys_log == 1 and send_keys_log[1].key == "esc", "opencode 中断立即发出第一个 esc")
+local seq_done = vim.wait(2000, function()
+  return #send_keys_log >= 2
+end)
+check(seq_done, "opencode 中断序列补发第二个 esc（defer 间隔发送）")
+check(
+  #send_keys_log == 2
+    and send_keys_log[1].pane_id == "p-oc"
+    and send_keys_log[2].pane_id == "p-oc"
+    and send_keys_log[2].key == "esc",
+  "两个 esc 均发往 opencode pane"
+)
+
+send_keys_log = {}
+chat_mod.interrupt_tool("omp")
+vim.wait(600, function()
+  return false
+end)
+check(#send_keys_log == 1 and send_keys_log[1].key == "esc", "omp 单键中断不变（仍是一个 esc）")
+
 -- 恢复真实执行器
 utils.set_exec(nil)
 utils.set_exec_async(nil)

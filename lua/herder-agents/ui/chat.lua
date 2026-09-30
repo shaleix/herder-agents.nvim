@@ -956,11 +956,27 @@ local function herdr_cli_show_input(name, tool, default_value)
   setup_file_tree(content_popup, prompt_popup, layout, session)
 end
 
+-- 中断按键序列的逐键间隔：TUI 需把每个 Esc 解析成独立按键事件，同一次写入的
+-- esc esc 会被输入解析器合并（alt+esc / 转义序列），间隔发送等价于人工连按
+local INTERRUPT_KEY_DELAY_MS = 150
+
+-- key 为单键字符串或键序列 table；序列逐键间隔发送（opencode 两段式 Esc 中断：
+-- 第一次 Esc 只进入 "ESC again to interrupt" 待确认态，第二次才真正中断）
 local function herdr_cli_interrupt(name, key)
   local pane = cli_pane(name)
-  if pane then
-    herdr_cli("pane", "send-keys", pane.pane_id, key)
+  if not pane then
+    return
   end
+  local keys = type(key) == "table" and key or { key }
+  local function send(i)
+    herdr_cli("pane", "send-keys", pane.pane_id, keys[i])
+    if i < #keys then
+      vim.defer_fn(function()
+        send(i + 1)
+      end, INTERRUPT_KEY_DELAY_MS)
+    end
+  end
+  send(1)
 end
 
 local function herdr_cli_new_session(name, tool)
