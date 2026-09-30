@@ -105,10 +105,40 @@ M.defaults = {
     },
   },
 
-  -- 用户命令名（置 false 关闭对应命令；:AIToggle 供 worktree_hook.sh 等外部脚本调用）
+  -- prompt 投递（借鉴 codex.nvim terminal.lua 的 pending_sends / composer-ready 机制）：
+  -- agent 进程未就绪（pane 刚分出还在 shell、TUI 启动中）时排队，就绪后自动投递；
+  -- 投递成败以 herdr CLI 退出码判定，失败保留草稿
+  delivery = {
+    enabled = true,
+    poll_interval_ms = 300, -- 就绪轮询间隔
+    settle_ms = 300, -- 进程就绪后的稳定等待，避开 TUI 初始化窗口
+    warn_after_ms = 5000, -- 排队超过该时长提醒一次（不丢弃，持续等待）
+    pane_gone_retries = 3, -- process-info 连续失败次数 → 判定 pane 已关闭，丢弃队列
+    -- 额外要求 herdr 的 agent 集成已识别出 agent 状态（agent_status 非空）才算就绪；
+    -- 更保守（herdr 检测有秒级延迟，启动会更慢），默认关闭
+    require_agent_status = false,
+  },
+
+  -- 发送给 agent 的选区上下文上限（借鉴 codex.nvim：超限拒绝而非静默截断）
+  context = {
+    max_lines = 500,
+    max_bytes = 65536,
+  },
+
+  -- agent 状态轮询 → User 事件（AIAgentWorking / AIAgentIdle / AIAgentBlocked，
+  -- payload 在 event.data）。每 tick 起一个 herdr 子进程，默认关闭，按需开启；
+  -- 开启后可做 "agent 完成 → 自动 format / 关 pane" 之类的自动化
+  status_poll = {
+    enabled = false,
+    interval_ms = 2000,
+  },
+
+  -- 用户命令名（置 false 关闭对应命令；:AIToggle 供 worktree_hook.sh 等外部脚本调用；
+  -- :AIDropQueue 丢弃排队中的 prompt，见 delivery.enabled）
   commands = {
     toggle = "AIToggle",
     switch = "AISwitch",
+    drop_queue = "AIDropQueue",
   },
 
   -- 快捷键：默认【不绑定任何快捷键】，由用户显式传入才注册。每项独立配置完整

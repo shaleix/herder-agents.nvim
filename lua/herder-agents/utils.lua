@@ -109,4 +109,35 @@ end
 
 M.sep_symbol = " > "
 
+-- herdr CLI 封装（输出 JSON 的子命令，如 pane list / process-info / current）：
+-- 失败或输出非 JSON 时返回 nil。原先只存在于 ui/chat（herdr_cli），
+-- delivery / status 等模块也需要，收敛到 utils 单点持有
+M.herdr_json = function(...)
+  local out = vim.fn.system({ "herdr", ... })
+  if vim.v.shell_error ~= 0 then
+    return nil
+  end
+  local ok, decoded = pcall(vim.json.decode, out)
+  if not ok then
+    return nil
+  end
+  return decoded
+end
+
+-- herdr CLI 封装（无 JSON 输出的子命令，如 pane send-text / send-keys）：
+-- 成功时 stdout 为空（非 JSON），只能以退出码判断成败
+M.herdr_ok = function(...)
+  vim.fn.system({ "herdr", ... })
+  return vim.v.shell_error == 0
+end
+
+-- 发 User autocmd 生命周期事件（payload 在 event.data；借鉴 codex.nvim 的事件约定）
+M.emit = function(pattern, data)
+  pcall(vim.api.nvim_exec_autocmds, "User", {
+    pattern = pattern,
+    modeline = false,
+    data = data or {},
+  })
+end
+
 return M

@@ -130,6 +130,13 @@ function M.show()
   notes.check_all()
   list = notes.list()
 
+  -- 草稿会话绑定：打开时钉住目标工具与 pane，提交时校验 —— 键入期间 :AISwitch
+  -- 切工具 / replace_tool 复用 pane 时拒绝发送，备注保留，防止把 review 注释
+  -- 静默发进另一个会话（绑定语义见 ui.chat.bind_tool_pane）
+  local chat = require("herder-agents.ui.chat")
+  local bound_name = vim.g.ai_tool or config.options.default_tool
+  local verify_binding = chat.bind_tool_pane(bound_name)
+
   local Popup = require("nui.popup")
   local NuiText = require("nui.text")
 
@@ -224,27 +231,45 @@ function M.show()
     end
   end
 
-  -- 提交：with_enter=true 直接发送；false 仅追加到 agent 输入框（不按回车）
+  -- 提交：with_enter=true 直接发送；false 仅追加到 agent 输入框（不按回车）。
+  -- 发送经 delivery（agent 未就绪时排队）；已勾选备注在【实际投递成功后】才移除，
+  -- 排队失败/被丢弃时备注原样保留在 store，供下次提交
   local function submit(with_enter)
     local text = build_submit_text(bufnr)
     if not text then
       utils.warn("Nothing to send: no checked notes and empty Extra Prompt")
       return
     end
-    local chat = require("herder-agents.ui.chat")
-    local name = vim.g.ai_tool or config.options.default_tool
-    local ok
-    if with_enter then
-      ok = chat.send_tool_prompt(name, text)
-    else
-      ok = chat.append_tool_prompt(name, text)
+    local pane = chat.lookup_tool_pane(bound_name)
+    if not pane then
+      utils.err(bound_name .. " pane not found; notes kept")
+      return
     end
-    if ok then
-      -- 提交成功后自动删除已发送（勾选）的备注（含源 buffer 的 ✎ extmark）；
-      -- 未勾选的保留，供下次提交
-      for _, note in ipairs(notes.checked()) do
-        notes.remove(note.id)
+    if not verify_binding(pane) then
+      return
+    end
+    local sent_ids = {}
+    for _, note in ipairs(notes.checked()) do
+      table.insert(sent_ids, note.id)
+    end
+    local on_done = function(ok)
+      if not ok then
+        utils.err("notes delivery to " .. bound_name .. " failed; notes kept for retry")
+        return
       end
+      -- 投递成功后自动删除已发送（勾选）的备注（含源 buffer 的 ✎ extmark）；
+      -- 未勾选的保留，供下次提交
+      for _, id in ipairs(sent_ids) do
+        notes.remove(id)
+      end
+    end
+    local accepted
+    if with_enter then
+      accepted = chat.send_tool_prompt(bound_name, text, on_done)
+    else
+      accepted = chat.append_tool_prompt(bound_name, text, on_done)
+    end
+    if accepted then
       close()
     end
   end

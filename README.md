@@ -115,6 +115,61 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 
 - `:AIToggle [tool]` — toggle, callable from external scripts (worktree hooks)
 - `:AISwitch [tool]` — switch tool (no argument cycles); like `<leader>ht`, replaces the agent pane
+- `:AIDropQueue` — drop prompts queued while no agent was ready
+
+## Prompt delivery
+
+Prompts travel through a small delivery queue modeled after codex.nvim's
+`pending_sends` design:
+
+- A prompt is sent only when the agent process is in the pane's foreground
+  (`herdr pane process-info`), re-checked after a short settle delay that skips
+  the TUI initialization window — including prompts submitted while the agent
+  already looks ready. Until then it is queued and delivered automatically once
+  the agent is up. Startup screens no longer eat your text.
+- While prompts are queued (or settling), readiness polling spawns a
+  short-lived `herdr` subprocess per tick (`delivery.poll_interval_ms`).
+- Delivery success is judged by the `herdr` CLI exit code. A failed
+  `send-text` no longer reports success: the chat-popup draft, the inline
+  prompt gap, and the notes are kept for retry.
+- Long waits warn once (`delivery.warn_after_ms`) but keep waiting;
+  `:AIDropQueue` drops everything queued; queues are dropped automatically
+  when the pane disappears.
+- The chat popup, inline prompts, and the notes popup are bound to the pane
+  they were opened against. If that pane is closed or replaced while you type
+  (`:AISwitch`, codex model switching reuse panes), submission is refused
+  instead of silently continuing a different session.
+- Checked notes are removed only after the delivery actually succeeds.
+- Visual selection context larger than `context.max_lines` / `context.max_bytes`
+  is rejected with a warning instead of being pasted.
+
+Caveat: interactive startup dialogs *inside* the pane (e.g. the codex trust
+prompt) cannot be detected — answer them manually; queued prompts send once
+the agent is up.
+
+## Events
+
+User autocmds (payloads in `event.data`):
+
+| Pattern | When | data |
+| --- | --- | --- |
+| `AIPromptQueued` | a prompt enters the queue | tool, pane_id, pending |
+| `AIPromptSent` | a prompt was delivered | tool, pane_id, submitted, queued |
+| `AIDeliveryFailed` | delivery failed / queue dropped | tool, pane_id, queued |
+| `AIAgentWorking` / `AIAgentIdle` / `AIAgentBlocked` | agent status change (needs `status_poll.enabled = true`) | tool, pane_id, status |
+
+Example: react when the agent finishes (opt-in poller):
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "AIAgentIdle",
+  callback = function(event)
+    if event.data.tool == "codex" then
+      -- agent finished: check buffers, run a formatter, ...
+    end
+  end,
+})
+```
 
 ## Configuration
 
@@ -134,6 +189,13 @@ opts = {
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
   switch_replace = true, -- switching tools closes the old agent & restarts the new one in its pane
+  -- prompt delivery queue (see "Prompt delivery"); enabled = false restores
+  -- fire-and-forget sending (exit-code checks stay)
+  delivery = { poll_interval_ms = 300, settle_ms = 300, warn_after_ms = 5000 },
+  -- selection context limits: rejected beyond, never truncated
+  context = { max_lines = 500, max_bytes = 65536 },
+  -- opt-in agent status poller -> AIAgentWorking/Idle/Blocked events
+  status_poll = { enabled = false, interval_ms = 2000 },
   codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
   icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
   notes = {
@@ -147,10 +209,16 @@ opts = {
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
-`add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`, `send_prompt(tool, text)` (submit without the popup),
+`add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`,
+`send_prompt(tool, text[, on_done])` (submit without the popup; `on_done(ok, queued)`
+fires after the actual delivery),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
 `require("herder-agents.notes")` is the session note store (`add` / `list` / `checked` /
 `toggle` / `remove` / `clear`).
 `require("herder-agents.ui.chat").append_tool_prompt(tool, text)` puts text into the
 agent's input box without pressing Enter.
+`require("herder-agents.delivery")` is the prompt transport: `deliver(pane_id, tool, text,
+opts)` (queue-aware send), `drop_all()`, `check_binding(name, bound_pane_id, pane)`,
+`pane_agent_running(pane_id)`.
+`require("herder-agents.status")` starts/stops the agent status poller.
 `require("herder-agents.ui.common").dim(bufnr)` provides the float backdrop.

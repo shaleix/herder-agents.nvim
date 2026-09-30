@@ -3,13 +3,15 @@
 -- - 工具注册表来自 config.options.tools（setup 可扩展），此处不再硬编码
 -- - toggle：当前 tab 无该工具 pane 时分屏启动，已有时切换 pane zoom
 -- - input：nui 弹窗草稿（顶部文件树 / 诊断插入 / Ctrl+t 符号路径），
---   提交时 bracketed paste 发送到 pane 并回车
+--   提交经 delivery 模块投递（agent 未就绪排队，成败以 herdr 退出码判定，
+--   失败保留草稿），不再直接 send-text 即发即忘
 local M = {}
 local common = require("herder-agents.ui.common")
 local sessions = require("herder-agents.sessions")
 local notes = require("herder-agents.notes")
 local utils = require("herder-agents.utils")
 local config = require("herder-agents.config")
+local delivery = require("herder-agents.delivery")
 
 -- Prompt 输入框标题（U+EBCF 图标用字节转义，避免编辑时丢失私有区字符）
 local prompt_label = "\238\175\143 Prompt"
@@ -224,8 +226,12 @@ local function popup_input(prompt, on_submit, opts, title)
     end
 
     layout:unmount()
-    on_submit(value)
-    last_input_content[title] = ""
+    -- on_submit 返回 false = 提交被拒（pane 缺失 / 绑定校验失败 / 投递失败），
+    -- 保留草稿供重试（借鉴 codex.nvim ask.lua 的 delivery failure 语义）
+    local accepted = on_submit(value)
+    if accepted ~= false then
+      last_input_content[title] = ""
+    end
 
     if original_winid then
       pcall(vim.api.nvim_set_current_win, original_winid)
@@ -701,29 +707,46 @@ end
 --   <prompt>
 --
 --   Target: @rel (line N) / (lines A-B)
--- @ 引用让 agent 直接读到文件；发送失败（pane 不在）时缝隙保留可重试
+-- @ 引用让 agent 直接读到文件；发送失败（pane 不在 / 已被替换）时缝隙保留可重试。
+-- 目标工具在打开时钉住并在保存时校验 pane 绑定，防止键入期间切工具发错会话
 function M.add_prompt(range)
   if not range then
     utils.warn("No location to annotate")
     return
   end
   local loc = note_loc_label(range)
+  local name = vim.g.ai_tool or config.options.default_tool
+  -- 注意：此处只能用 M.* 表访问（bind_tool_pane / deliver_prompt 等局部函数
+  -- 定义在文件后方，直接引用会按全局 nil 解析）
+  local verify_binding = M.bind_tool_pane(name)
   inline_input_gap(range, {
     title = "prompt ",
     footer = " C-Enter: send · Esc: cancel ",
     on_save = function(text)
-      local name = vim.g.ai_tool or config.options.default_tool
+      local tool = config.options.tools[name]
+      if not tool then
+        utils.err(name .. " is not a herdr CLI tool")
+        return false
+      end
+      local pane = M.lookup_tool_pane(name)
+      if not pane then
+        utils.warn(name .. " pane not found; use " .. config.key_hint("toggle", "<leader>ho") .. " first")
+        return false
+      end
+      if not verify_binding(pane) then
+        return false
+      end
       local target
       if range.start_line == range.end_line then
         target = string.format("Target: @%s (line %d)", range.rel, range.start_line)
       else
         target = string.format("Target: @%s (lines %d-%d)", range.rel, range.start_line, range.end_line)
       end
-      if M.send_tool_prompt(name, text .. "\n\n" .. target) then
-        utils.info("Prompt sent → " .. name .. " @ " .. loc)
-        return true
-      end
-      return false
+      return M.send_tool_prompt(name, text .. "\n\n" .. target, function(ok)
+        if ok then
+          utils.info("Prompt delivered → " .. name .. " @ " .. loc)
+        end
+      end)
     end,
   })
 end
@@ -753,13 +776,9 @@ local function build_prompt_with_files(value)
   return (prompt:gsub("\n\n+$", "\n"))
 end
 
+-- herdr CLI 封装已移至 utils.herdr_json（delivery / status 共用一份实现）
 local function herdr_cli(...)
-  local out = vim.fn.system({ "herdr", ... })
-  if vim.v.shell_error ~= 0 then
-    return nil
-  end
-  local ok, decoded = pcall(vim.json.decode, out)
-  return ok and decoded or nil
+  return utils.herdr_json(...)
 end
 
 local function herdr_find_pane(label, tab_id)
@@ -780,6 +799,19 @@ local function current_herdr_tab_id()
   local current = herdr_cli("pane", "current")
   local current_pane = current and current.result and current.result.pane
   return current_pane and current_pane.tab_id, current_pane
+end
+
+-- 草稿会话绑定（借鉴 codex.nvim ask.lua 的 follow-up 绑定）：草稿打开时钉住目标
+-- pane，返回校验闭包；提交时对查到的当前 pane 调用，pane 已被关闭/替换
+--（switch_replace / codex model 切换会改名复用同一 pane）则拒绝发送，
+-- 防止把跟进消息静默发进另一个会话。打开时 pane 还不存在 → 绑定为 nil，
+-- 无法校验，放行（pane 缺失的提示由调用方给出）
+local function bind_tool_pane(name)
+  local bound_pane = herdr_find_pane(name, current_herdr_tab_id())
+  local bound_pane_id = bound_pane and bound_pane.pane_id or nil
+  return function(current_pane)
+    return delivery.check_binding(name, bound_pane_id, current_pane)
+  end
 end
 
 local function toggle_cli_in_herdr_pane(cmd, label)
@@ -862,11 +894,14 @@ local function bracketed_paste_encode(text)
   return "\27[200~" .. text .. "\27[201~"
 end
 
-local function herdr_cli_send_prompt(pane_id, tool, text)
+-- 编码（paste_wrap）后经 delivery 投递（借鉴 codex.nvim pending_sends）：入队后
+-- 等就绪（settle 复检）自动发送；成败以 herdr 退出码判定，结果经
+-- on_done(ok, queued) 异步回调告知，不再出现 send-text 失败仍报成功的假成功
+local function deliver_prompt(name, pane_id, tool, text, submit_key, on_done)
   if tool.paste_wrap then
     text = bracketed_paste_encode(text)
   end
-  herdr_cli("pane", "send-text", pane_id, text)
+  return delivery.deliver(pane_id, name, text, { submit_key = submit_key, on_done = on_done })
 end
 
 -- codex 专用 "/queue <任务>"：提交时去掉前缀，最后一个按键为 tab 而非 enter，
@@ -890,23 +925,38 @@ local function herdr_cli_show_input(name, tool, default_value)
   if default_value and default_value ~= "" then
     opts.default_value = default_value
   end
+  -- 草稿会话绑定：打开时钉住目标 pane，提交时校验未被替换（见 bind_tool_pane）
+  local verify_binding = bind_tool_pane(name)
+  local keep_draft = function(value)
+    last_input_content[title] = vim.split(value, "\n", { plain = true })
+  end
   local session = sessions.current_session()
   local content_popup, prompt_popup, layout = popup_input(prompt_label, function(value)
     local pane = cli_pane(name)
     if not pane then
-      return
+      return false -- pane 缺失：草稿保留，toggle 后重试（原行为是草稿直接丢失）
+    end
+    if not verify_binding(pane) then
+      return false -- pane 已被替换：草稿保留
     end
     local submit_key = "enter"
     if name == "codex" then
       value, submit_key = codex_queue_value(value)
       if not value then
         utils.warn("/queue task is empty, skip")
-        return
+        return false
       end
     end
     save_history(value, vim.fn.getcwd())
-    herdr_cli_send_prompt(pane.pane_id, tool, build_prompt_with_files(value))
-    herdr_cli("pane", "send-keys", pane.pane_id, submit_key)
+    local accepted = deliver_prompt(name, pane.pane_id, tool, build_prompt_with_files(value), submit_key, function(ok)
+      if not ok then
+        -- 投递失败（send-text/send-keys 退出码非 0，或排队后 pane 消失被丢弃）：
+        -- 恢复草稿供重试（下次打开输入框预填，历史里也有）
+        keep_draft(value)
+        utils.err("prompt delivery to " .. name .. " failed; draft kept for retry")
+      end
+    end)
+    return accepted
   end, opts, title)
   -- 钉住本弹窗的目标工具，供 aider-input 补全源决定技能前缀（qodercli/omp 用 /name，codex 用 $name）
   vim.b[prompt_popup.bufnr].ai_tool = name
@@ -923,8 +973,8 @@ end
 local function herdr_cli_new_session(name, tool)
   local pane = cli_pane(name)
   if pane then
-    herdr_cli_send_prompt(pane.pane_id, tool, tool.new_cmd or "/clear")
-    herdr_cli("pane", "send-keys", pane.pane_id, "enter")
+    -- agent 未就绪（刚重启等）时排队，避免 /new 落进 shell
+    deliver_prompt(name, pane.pane_id, tool, tool.new_cmd or "/clear", "enter")
   end
 end
 
@@ -999,9 +1049,15 @@ local function send_tool_directive(name, spec, what)
     return false
   end
   if spec.cmd then
-    herdr_cli_send_prompt(pane.pane_id, tool, spec.cmd)
-    herdr_cli("pane", "send-keys", pane.pane_id, "enter")
-    utils.info(name .. ": " .. what .. " command sent → " .. spec.cmd)
+    -- 命令型指令（如 codex /approvals）同样经 delivery：agent 未就绪时排队，
+    -- 实际投递后才报告（投递是异步的，入队成功 ≠ 已发送）
+    deliver_prompt(name, pane.pane_id, tool, spec.cmd, "enter", function(ok)
+      if ok then
+        utils.info(name .. ": " .. what .. " delivered → " .. spec.cmd)
+      else
+        utils.err(name .. ": " .. what .. " delivery failed → " .. spec.cmd)
+      end
+    end)
   else
     for _, key in ipairs(spec.keys) do
       -- send-keys 成功时 stdout 为空（非 JSON），只能以退出码判断成败
@@ -1054,21 +1110,9 @@ local function poll(cond, interval_ms, max_ticks, on_done)
   vim.defer_fn(step, interval_ms)
 end
 
--- pane 前台是否运行着非 shell 进程（agent）；返回 running, 前台进程组 id
--- 以 process-info 的前台进程为准（herdr 的 agent 检测有秒级延迟，不可靠）
-local function pane_agent_running(pane_id)
-  local info = herdr_cli("pane", "process-info", "--pane", pane_id)
-  local pi = info and info.result and info.result.process_info
-  if not pi then
-    return nil -- 查询失败（pane 可能已关闭）
-  end
-  for _, p in ipairs(pi.foreground_processes or {}) do
-    if p.pid ~= pi.shell_pid then
-      return true, pi.foreground_process_group_id
-    end
-  end
-  return false
-end
+-- pane 前台 agent 检测移至 delivery 模块（prompt 投递排队与 replace_tool 共用一份
+-- 实现；以 process-info 的前台进程为准，herdr 的 agent 集成检测有秒级延迟不可靠）
+local pane_agent_running = delivery.pane_agent_running
 
 -- 切换 agent 的前置检查：旧工具 agent 正在 working/blocked 时先中断再切
 --（与 codex model 切换的守卫一致；无 pane / 非 herdr 环境直接放行）
@@ -1196,37 +1240,38 @@ function M.replace_tool(old_name, new_name)
   return true
 end
 
--- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交
---（外部调用方使用，如 fzf-lua 诊断修复、sessions.send）
-function M.send_tool_prompt(name, text)
+-- send_tool_prompt / append_tool_prompt 的共用实现：校验工具与 pane 后经
+-- delivery 投递，submit_key 决定是否补提交键（enter = 提交，nil = 仅追加）
+local function deliver_to_tool(name, text, submit_key, on_done)
   local tool = config.options.tools[name]
   if not tool then
     utils.err(name .. " is not a herdr CLI tool")
+    if on_done then
+      on_done(false, false)
+    end
     return false
   end
   local pane = cli_pane(name)
   if not pane then
+    if on_done then
+      on_done(false, false)
+    end
     return false
   end
-  herdr_cli_send_prompt(pane.pane_id, tool, text)
-  herdr_cli("pane", "send-keys", pane.pane_id, "enter")
-  return true
+  return deliver_prompt(name, pane.pane_id, tool, text, submit_key, on_done)
+end
+
+-- 不经输入框，直接向指定工具的 herdr pane 发送 prompt 并回车提交
+--（外部调用方使用，如 fzf-lua 诊断修复、sessions.send）。
+-- agent 未就绪时排队；on_done(ok, queued) 在实际投递后回调（失败为 false）
+function M.send_tool_prompt(name, text, on_done)
+  return deliver_to_tool(name, text, "enter", on_done)
 end
 
 -- 只把文本追加到指定工具 pane 的 agent 输入框，【不按回车】：
 -- 内容停留在 TUI 输入框中，用户可继续编辑后手动提交（notes_view 的 <C-a> 使用）
-function M.append_tool_prompt(name, text)
-  local tool = config.options.tools[name]
-  if not tool then
-    utils.err(name .. " is not a herdr CLI tool")
-    return false
-  end
-  local pane = cli_pane(name)
-  if not pane then
-    return false
-  end
-  herdr_cli_send_prompt(pane.pane_id, tool, text)
-  return true
+function M.append_tool_prompt(name, text, on_done)
+  return deliver_to_tool(name, text, nil, on_done)
 end
 
 -- 供 codex_model 等外部模块复用：执行 herdr CLI 并解析 JSON 结果
@@ -1238,6 +1283,16 @@ end
 function M.find_tool_pane(name)
   return cli_pane(name)
 end
+
+-- 供 notes_view 等模块复用：静默查找当前 tab 的 pane（找不到不提示，返回 nil）。
+-- 用于草稿打开时记录绑定目标（配合 delivery.check_binding 校验）
+function M.lookup_tool_pane(name)
+  return herdr_find_pane(name, current_herdr_tab_id())
+end
+
+-- 供 notes_view / M.add_prompt 复用：草稿会话绑定（见局部 bind_tool_pane 注释），
+-- 返回提交时对当前 pane 调用的校验闭包
+M.bind_tool_pane = bind_tool_pane
 
 function M.show_history(on_select)
   on_select = on_select or M.show_input

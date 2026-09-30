@@ -17,10 +17,27 @@ local function fence_for(text)
   return string.rep("`", longest)
 end
 
+-- 上下文大小上限（借鉴 codex.nvim context.check_limits：超限拒绝而非静默截断，
+-- 避免一次误全选把几 MB 灌进 bracketed paste）；返回错误消息或 nil
+function M._check_limits(lines, text)
+  local limits = require("herder-agents.config").options.context or {}
+  local max_lines = limits.max_lines or 500
+  local max_bytes = limits.max_bytes or 65536
+  if #lines > max_lines then
+    return string.format("selection has %d lines; limit is %d", #lines, max_lines)
+  end
+  if #text > max_bytes then
+    return string.format("selection has %d bytes; limit is %d", #text, max_bytes)
+  end
+  return nil
+end
+
 -- 当前缓冲区的活动可视选区（x 模式映射回调内调用）；非可视模式 / 无名缓冲区返回 nil
 -- 注意：回调执行期间 '< '> mark 与 visualmode() 是【上一次】选区的陈旧值
 --（退出可视模式才更新，首次选区时为 0/""），当前选区必须用 'v'（锚点）+ 光标位置，
 -- 运动类型直接取 mode()（"v"/"V"/"^V" 即 getregion 的 type 值）
+-- 返回 prompt, err：无选区/无名缓冲区时两者皆 nil；超过 context 上限时
+-- 返回 nil + 错误消息（拒绝而非截断，调用方负责提示）
 function M.selection()
   local bufnr = vim.api.nvim_get_current_buf()
   local path = vim.api.nvim_buf_get_name(bufnr)
@@ -33,7 +50,12 @@ function M.selection()
   end
   local start_pos = vim.fn.getpos("v")
   local end_pos = vim.fn.getcurpos()
+  -- 从下往上选时锚点行在光标行之下：归一化行序，保证 (lines a-b) 恒为 a<=b
+  --（codex.nvim context._selection_text 同款 math.min/math.max 处理）
   local start_line, end_line = start_pos[2], end_pos[2]
+  if start_line > end_line then
+    start_line, end_line = end_line, start_line
+  end
   if start_line < 1 or end_line < 1 then
     return nil
   end
@@ -42,6 +64,10 @@ function M.selection()
     return nil
   end
   local text = table.concat(lines, "\n")
+  local limit_err = M._check_limits(lines, text)
+  if limit_err then
+    return nil, limit_err
+  end
   local ft = vim.bo[bufnr].filetype or ""
   local fence = fence_for(text)
   return string.format(
@@ -53,7 +79,8 @@ function M.selection()
     ft,
     text,
     fence
-  )
+  ),
+    nil
 end
 
 -- 会话文件列表 → "Relate file:" 附件块；空列表返回 nil

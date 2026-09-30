@@ -47,6 +47,12 @@ function M.setup(opts)
   tools.register_herdr_tools()
   setup_commands()
   setup_keymaps()
+
+  -- agent 状态轮询（默认关闭）：开启后发出 AIAgentWorking/Idle/Blocked User 事件
+  local poll = config.options.status_poll
+  if poll and poll.enabled and vim.env.HERDR_ENV == "1" then
+    require("herder-agents.status").start()
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -83,6 +89,15 @@ setup_commands = function()
         return tools.names()
       end,
       desc = "Switch AI tool",
+    })
+  end
+
+  -- 丢弃排队中的 prompt（delivery 排队堆积时的逃生口）
+  if cmds.drop_queue then
+    vim.api.nvim_create_user_command(cmds.drop_queue, function()
+      require("herder-agents.delivery").drop_all()
+    end, {
+      desc = "Drop queued AI prompts",
     })
   end
 end
@@ -136,10 +151,21 @@ setup_keymaps = function()
           M.input()
         end, { desc = desc })
       end
-      -- 可视模式：把选区格式化为 @path (lines a-b) + fence 上下文，预填进草稿
+      -- 可视模式：把选区格式化为 @path (lines a-b) + fence 上下文，预填进草稿；
+      -- 选区超过 context.max_lines / max_bytes 时拒绝（借鉴 codex.nvim：
+      -- 报错而非静默截断，避免误全选灌进 bracketed paste）
       if #visual_modes > 0 then
         vim.keymap.set(visual_modes, lhs, function()
-          M.input(require("herder-agents.context").selection())
+          local selection, err = require("herder-agents.context").selection()
+          if selection then
+            M.input(selection)
+          else
+            if err then
+              require("herder-agents.utils").warn(err)
+            else
+              M.input(nil)
+            end
+          end
         end, { desc = desc })
       end
     end
