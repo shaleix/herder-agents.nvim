@@ -13,6 +13,10 @@ local utils = require("herder-agents.utils")
 local config = require("herder-agents.config")
 local delivery = require("herder-agents.delivery")
 
+-- 兼容 LuaJIT(5.1) 全局 unpack 与 5.2+ 的 table.unpack；
+-- 0.12 已移除 vim.list_unpack，勿再使用
+local unpack = unpack or table.unpack
+
 -- Prompt 输入框标题（U+EBCF 图标用字节转义，避免编辑时丢失私有区字符）
 local prompt_label = "\238\175\143 Prompt"
 
@@ -856,7 +860,7 @@ local function toggle_cli_in_herdr_pane(cmd, label)
       table.insert(args, part)
     end
   end
-  utils.herdr_ok(table.unpack(args))
+  utils.herdr_ok(unpack(args))
   utils.herdr_ok("pane", "rename", pane_id, label)
 end
 
