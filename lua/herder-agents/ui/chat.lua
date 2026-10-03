@@ -1091,15 +1091,19 @@ function M.switch_tool_mode(name)
   return send_tool_directive(name, tool and tool.mode_switch, "mode_switch")
 end
 
--- 切换模型：按工具的 model_switch 配置经 herdr 发送指令（codex 走专用重启流程，不经此函数）
---   opencode v2: { keys = { "ctrl+x", "m" } } 打开模型选择对话框（leader + model.list），
---   在 pane 内选中即会话内实时生效，无需重启；{ keys = { "f2" } } 则直接循环最近使用模型
+-- 切换模型（<leader>hm）：配置了 tools.<name>.models 时走统一流程
+-- （平铺单选 → model_apply = "api" 时原地切换（opencode 默认），否则优雅
+-- 退出 → model_resume 模板重启，见 model_restart.lua）；
+-- 未配置 models 的工具兜底发 model_switch 指令（如 f2 循环最近模型）
 function M.switch_tool_model(name)
   local tool = config.options.tools[name]
+  if tool and tool.models then
+    return require("herder-agents.model_restart").switch(name)
+  end
   return send_tool_directive(name, tool and tool.model_switch, "model_switch")
 end
 
--- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI，同 codex_model 模式）
+-- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI）
 local function poll(cond, interval_ms, max_ticks, on_done)
   local tick = 0
   local function step()
@@ -1178,9 +1182,16 @@ function M.replace_tool(old_name, new_name)
   local function launch_new()
     herdr_cli("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
     -- 旧 agent（如 codex）进程退出后，其 TUI 清场仍可能迟到向 pane 输出一段特殊
-    -- 字符，第一次 ctrl+c 赶在它们落进 shell 输入行之前；稍等一拍再补一次 ctrl+c
-    -- 兜底清行，避免启动命令拼在残留字符后面导致新 agent 起不来
+    -- 字符，第一次 ctrl+c 赶在它们落进 shell 输入行之前；此外 TUI 可能遗留终端
+    -- 私有模式（kitty keyboard / SGR 鼠标上报 / bracketed paste / 隐藏光标），
+    -- herdr 仍会把真实按键与鼠标事件编码成转义序列持续污染输入行
+    -- （"5:1u9;5:1uopencode" → command not found）。这些模式只能由 pane 内
+    -- 进程写 tty 输出侧复位 —— 先让 shell 执行一条 printf 复位载荷
+    --（自带前导 \r，与被污染行原子隔离），再启动新 agent
+    utils.reset_pane_terminal(pane_id)
     vim.defer_fn(function()
+      -- 复位生效后不再产生新的事件污染；printf 执行前排队迟到的事件再补一次
+      -- ctrl+c 清行，保证启动命令落在一个干净的提示符上
       herdr_cli("pane", "send-keys", pane_id, "ctrl+c")
       herdr_cli("pane", "run", pane_id, new_cmd)
       herdr_cli("pane", "rename", pane_id, new_name)
@@ -1282,12 +1293,12 @@ function M.append_tool_prompt(name, text, on_done)
   return deliver_to_tool(name, text, nil, on_done)
 end
 
--- 供 codex_model 等外部模块复用：执行 herdr CLI 并解析 JSON 结果
+-- 供 model_restart 等外部模块复用：执行 herdr CLI 并解析 JSON结果
 function M.herdr_exec(...)
   return herdr_cli(...)
 end
 
--- 供 codex_model 等外部模块复用：按 label 查找当前 tab 的 pane（找不到时给出提示）
+-- 供 model_restart 等外部模块复用：按 label 查找当前 tab 的 pane（找不到时给出提示）
 function M.find_tool_pane(name)
   return cli_pane(name)
 end

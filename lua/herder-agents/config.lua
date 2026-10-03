@@ -26,10 +26,25 @@ M.defaults = {
   --                 （指令打开 pane 内对话框、需要上下键选择时使用）
   --                 未配置时该工具不支持切换（仅提示）。示例：
   --                   claude = { mode_switch = { keys = { "shift+tab" } } } -- 循环权限模式
-  --   model_switch  模型切换（<leader>hm；codex 有专用 provider/model 重启流程，不走此配置），
+  --   model_switch  模型切换（<leader>hm；未配置/置 false 关闭 models 时的兜底行为），
   --                 格式同 mode_switch。示例：
-  --                   opencode v2 = { keys = { "ctrl+x", "m" }, focus = true } -- 模型选择对话框
-  --                   快捷循环最近模型 = { keys = { "f2" } }                    -- model.cycle_recent
+  --                   快捷循环最近模型 = { keys = { "f2" } }   -- model.cycle_recent
+  --   models        模型切换候选（<leader>hm 主通道，配置驱动）：两级
+  --                 { [provider] = { model, ... } }，选择时平铺为 "provider/model"
+  --                 单层列表在 nvim 内选择（fzf-lua 优先，否则 vim.ui.select）；
+  --                 model 串可带 #variant 后缀原样传递。选中后按 model_apply 应用
+  --   model_apply   选中候选后的应用方式："api"（原地切换，opencode 默认：经
+  --                 `opencode api post /api/session/{id}/model` 直接改当前会话
+  --                 的模型，与 pane 内 ctrl+x m 对话框同源，agent working 中
+  --                 也可切，对后续 turn 生效）/ nil（默认：优雅退出 → 按
+  --                 model_resume 模板重启 resume，见 model_restart.lua）
+  --   model_resume  重启命令模板（argv 数组），占位符 {session} {provider} {model}；
+  --                 命令由 herdr pane run 逐字输入 pane 内 shell 执行，含空格/引号
+  --                 的参数需自带 shell 引号（参考 codex 默认模板的 -m/-c 写法）
+  --   session_source 会话 id 捕获方式："codex"（herdr agent_session + 退出提示
+  --                 兜底）/"opencode"（api session.list 按 pane 目录 + 标题匹配）/
+  --                 nil（不捕获；模板不能含 {session}）
+  --   quit_cmd      优雅退出命令（默认 "/quit"；opencode 的 /quit 是 /exit 别名）
   tools = { -- opencode: 与 omp 一样用 Esc 中断；ctrl+c 只会清空输入框（双击则退出）。
     -- opencode TUI 的中断是两段式：第一次 Esc 进入待确认态（提示 "ESC again to
     -- interrupt"），第二次 Esc 才真正中断，故默认序列发送两个 esc（单键即中断的
@@ -42,9 +57,23 @@ M.defaults = {
       -- opencode v2：agent.cycle 默认 shift+tab（循环 build/plan）；v2 里 tab 是补全键！
       -- v1 时代的 agent_cycle 才是 tab，用 v1 的话改成 { keys = { "tab" } }
       mode_switch = { keys = { "shift+tab" } },
-      -- opencode v2：leader(ctrl+x) + model.list(<leader>m) 打开模型对话框，
-      -- 需在 pane 内上下键选择 → focus 跳转焦点过去；选中即会话内实时生效
+      -- 默认通道：opencode v2 的 leader(ctrl+x) + model.list(<leader>m) 打开
+      -- 模型对话框，需在 pane 内上下键选择 → focus 跳转焦点过去；
+      -- 选中即会话内实时生效（不重启会话）
       model_switch = { keys = { "ctrl+x", "m" }, focus = true },
+      -- 模型切换主通道（可选，默认不配置）：两级 models 平铺单选（<leader>hm），
+      -- 选中后经下方 model_apply 原地生效。provider 键与 `opencode models`
+      -- 输出的前缀一致；配置后即取代上面的对话框兜底，示例：
+      -- models = {
+      --   ["zhipuai-coding-plan"] = { "glm-5.3", "glm-5.3#high", "glm-5.3-flash" },
+      --   opencode = { "mimo-v2.6-flash-free" },
+      -- },
+      session_source = "opencode",
+      -- <leader>hm 主通道走 API 原地切换（POST /api/session/{id}/model，与
+      -- pane 内 ctrl+x m 对话框同源）：选中候选即对当前会话生效，不退出重启，
+      -- agent working 中也可切（对后续 turn 生效）。若想走退出重启，把此项
+      -- 置 nil 并配置 model_resume 模板即可（注意 v2.0.19 的 TUI 顶层不认 -m）
+      model_apply = "api",
     },
     qodercli = { title = " Qoder CLI Chat ", paste_wrap = true },
     crush = { title = " Crush Chat " },
@@ -57,6 +86,23 @@ M.defaults = {
       paste_wrap = true,
       new_cmd = "/new",
       mode_switch = { cmd = "/approvals", focus = true }, -- 审批模式选择器（pane 内操作，跳转焦点）
+      -- 模型切换主通道：两级 models 平铺单选 → /quit 退出 → codex resume 重启。
+      -- provider 键与 ~/.codex/config.toml 的 [model_providers.<键>] 一致，示例：
+      -- models = {
+      --   openai = { "gpt-6-astra", "gpt-5.6-sol" },
+      --   ZAI = { "glm-5.3" },
+      -- },
+      session_source = "codex",
+      -- -m/-c 的值自带 shell 引号（pane run 逐字输入 shell 执行）
+      model_resume = {
+        "codex",
+        "resume",
+        "{session}",
+        "-m",
+        "'{model}'",
+        "-c",
+        "'model_provider=\"{provider}\"'",
+      },
     },
     hermes = { title = " Hermes CLI Chat ", cmd = "hermes --tui" },
   },
@@ -95,18 +141,6 @@ M.defaults = {
     preview_width = 40,
     -- 提交给 agent 的注释块标题：用指令句明确"这些 review 注释需要修改"
     submit_header = "Please address these code review comments:",
-  },
-
-  -- codex provider/model 切换（<leader>hm）
-  codex = {
-    home = "~/.codex",
-    -- provider -> model 预设；provider 键需与 ~/.codex/config.toml 的
-    -- [model_providers.<键>] 一致（openai 是内置默认 provider，无需在 toml 中声明）
-    model_presets = {
-      openai = { "gpt-6-astra", "gpt-5.6-sol" },
-      ZAI = { "glm-5.3" },
-      ["x-api"] = { "qwen3.8-max" },
-    },
   },
 
   -- prompt 投递（借鉴 codex.nvim terminal.lua 的 pending_sends / composer-ready 机制，
@@ -172,7 +206,7 @@ M.defaults = {
     -- line_prompt = "<leader>hp", -- 在光标行 / 可视选区内联输入 prompt，C-Enter 直发 agent
     -- notes_view = "<leader>hr", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
     -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
-    -- codex_model = "<leader>hm",
+    -- model = "<leader>hm", -- 切换模型（models 配置驱动重启 / model_switch 兜底）
   },
 }
 

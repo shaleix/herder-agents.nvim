@@ -29,7 +29,7 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       line_prompt = "<leader>hp",
       notes_view = "<leader>hr",
       switch_mode = "<leader>hM",
-      codex_model = "<leader>hm",
+      model = "<leader>hm",
     },
   },
 }
@@ -53,13 +53,13 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hx` | interrupt |
 | `<leader>hc` | new session |
 | `<leader>hh` | prompt history |
-| `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first) |
+| `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first). Before the relaunch the pane's terminal modes are reset and the input line cleared: an agent that exits without restoring them (kitty keyboard push, SGR mouse reporting, bracketed paste, hidden cursor) leaves the shell encoding real key/mouse events into garbage (`5:1u9;5:1uopencode` → command not found), so the launch command would glue onto the residue and never start |
 | `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hp` | inline prompt at the cursor line / selection — `Ctrl+Enter` sends it straight to the agent with a `Target: @file (line N)` locator |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals` + focus jump) |
-| `<leader>hm` | switch model — codex: provider/model picker + session resume; opencode v2: opens the in-pane model dialog (`ctrl+x m`) and jumps herdr focus to the pane; other tools via `model_switch` config |
+| `<leader>hm` | switch model — unified flow for every tool: flatten the two-level `tools.<name>.models` config (`provider → models`) into one `provider/model` picker, then apply it per tool: opencode switches **in place** via `opencode api post /api/session/{id}/model` (same call as the in-pane `ctrl+x m` dialog — no restart, works while the agent is running, `#variant` suffixes map to the API `variant` field); tools with a `model_resume` template gracefully quit and relaunch in the same pane (codex: `codex resume <session> -m …`; session ids come from `herdr agent_session` / `opencode api session.list` matched against the pane title). `models` is opt-in; tools without `models` fall back to the `model_switch` key directive (opencode's is the in-pane `ctrl+x m` dialog) |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 `Ctrl+t` insert symbol path · `Ctrl+d` insert diagnostics · `dd`/`D` drop/clear attachments.
@@ -192,11 +192,29 @@ opts = {
   default_tool = "opencode",
   tools = { -- add any CLI agent here
     gemini = { title = " Gemini Chat " },
-    -- mode_switch drives <leader>hM, model_switch drives <leader>hm
-    -- (keys = herdr send-keys, cmd = text + Enter, focus = jump herdr focus to
-    --  the pane afterwards — for directives that open an in-pane dialog);
+    -- mode_switch drives <leader>hM (keys = herdr send-keys, cmd = text +
+    -- Enter, focus = jump herdr focus to the pane afterwards);
     -- opencode/codex ship sensible defaults
     claude = { title = " Claude Chat ", mode_switch = { keys = { "shift+tab" } } },
+    -- model switching (<leader>hm>): two-level models config flattened into a
+    -- single provider/model picker, then applied per tool. opencode switches
+    -- IN PLACE via the session model API (same call as the in-pane ctrl+x m
+    -- dialog — no restart, works while the agent is running; `#variant`
+    -- suffixes map to the API variant field). Tools with a model_resume
+    -- template quit + relaunch instead (placeholders {session} {provider}
+    -- {model}; session ids come from session_source: "codex" = herdr
+    -- agent_session, "opencode" = api session.list matched against the pane
+    -- title). models is opt-in; by default <leader>hm uses the in-pane dialog
+    -- fallback (ctrl+x m + focus jump).
+    opencode = {
+      models = {
+        ["zhipuai-coding-plan"] = { "glm-5.3", "glm-5.3#high", "glm-5.3-flash" },
+        opencode = { "mimo-v2.6-flash-free" },
+      },
+    },
+    codex = {
+      models = { openai = { "gpt-6-astra", "gpt-5.6-sol" }, ZAI = { "glm-5.3" } },
+    },
   },
   tool_cmds = { codex = "codex -m gpt-6-astra" }, -- per-project launch overrides
   split = { direction = "right", ratio = 0.55 },
@@ -214,7 +232,6 @@ opts = {
   context = { max_lines = 500, max_bytes = 65536 },
   -- opt-in agent status poller -> AIAgentWorking/Idle/Blocked events
   status_poll = { enabled = false, interval_ms = 2000 },
-  codex = { model_presets = { openai = { "gpt-6-astra", "gpt-5.6-sol" } } },
   icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
   notes = {
     preview_width = 40, -- end-of-line note preview width

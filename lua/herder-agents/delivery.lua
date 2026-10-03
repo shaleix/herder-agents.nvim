@@ -41,7 +41,7 @@ end
 -- pane 前台是否有 agent 进程（非 shell）：
 -- 返回 true, 前台进程组 id / false（pane 在 shell）/ nil（查询失败，pane 可能已关闭）。
 -- 以 process-info 的前台进程为准（herdr 的 agent 集成检测有秒级延迟，不可靠）；
--- 原 ui/chat 与 codex_model 各持一份，收敛到这里单点持有
+-- 原 ui/chat 与旧模型切换模块各持一份，收敛到这里单点持有
 function M.pane_agent_running(pane_id)
   local info = utils.herdr_json("pane", "process-info", "--pane", pane_id)
   local pi = info and info.result and info.result.process_info

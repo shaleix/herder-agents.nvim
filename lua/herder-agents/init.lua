@@ -215,9 +215,9 @@ setup_keymaps = function()
     M.switch_mode()
   end, "AI switch agent mode")
 
-  -- 模型切换：codex 走专用 provider/model 重启流程（记录会话 → 选择 → /quit →
-  -- codex resume <session> -m <model>）；其他工具按 model_switch 配置经 herdr 发送
-  map("codex_model", { "n", "x" }, function()
+  -- 模型切换：配置 models 的工具走统一「平铺单选 → 退出 → resume 重启」，
+  -- 未配置的工具按 model_switch 配置经 herdr 发送指令兜底
+  map("model", { "n", "x" }, function()
     M.switch_model()
   end, "AI switch model")
 end
@@ -292,23 +292,14 @@ function M.switch_tool()
 end
 
 -- 切换模型（<leader>hm 统一入口）：
--- codex → 专用 provider/model 选择 + 会话 resume 重启流程；
--- 其他工具 → 按 tools.<name>.model_switch 经 herdr 发送 keys/cmd
---（opencode v2 默认 ctrl+x m 打开模型选择对话框，pane 内选中即会话内实时生效，无需重启）
+-- 配置了 tools.<name>.models 的工具 → 平铺单选后按 model_apply 应用
+-- （opencode 默认 API 原地切换；其余优雅退出 + model_resume 重启）；
+-- 未配置 models 的工具 → 按 model_switch 配置经 herdr 发送 keys/cmd 兜底
 function M.switch_model()
-  if tools.current_name() == "codex" then
-    require("herder-agents.codex_model").switch()
-    return
-  end
   local backend = tools.backend()
   if backend and backend.switch_model then
     backend.switch_model()
   end
-end
-
--- 兼容旧 API：等价于 switch_model()（不再仅限 codex）
-function M.switch_codex_model()
-  M.switch_model()
 end
 
 -- ---------------------------------------------------------------------------
