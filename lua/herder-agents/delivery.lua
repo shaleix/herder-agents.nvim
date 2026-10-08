@@ -4,11 +4,16 @@
 -- herdr pane 场景；并优先使用 herdr 的 agent 集成原语（用法参考 herdr-nvim）：
 --   - 提交：`herdr agent prompt`（服务端替你按回车、理解 agent 状态机、
 --     blocked 时拒绝提交），原文直传，不做 bracketed paste 编码
---   - 等待：`herdr agent wait --until idle/working`（状态机精确等待，
+--   - 等待：`herdr agent wait --until idle/working/unknown`（状态机精确等待，
 --     分段超时，异步执行避免卡 UI）
 -- 仅对 herdr 已注册的 agent pane 生效（按 pane_id 在 agent list 中探测）；
 -- 自定义工具 / 未注册 pane / codex /queue（tab 提交）/ append-only 场景回退到
 -- pane send-text + bracketed paste + 提交键的旧路径。
+--
+-- 就绪状态含 unknown：屏幕识别型 agent（codex）回合结束后停在 unknown、
+-- idle 不可达，unknown 不算就绪会让 wait 无限超时 → 消息永久排队（死锁）。
+-- unknown 的提交经 settle 复查收敛后走 agent prompt，blocked 仍由 herdr
+-- 服务端拒绝（agent_blocked → 保留草稿）。
 --
 -- 投递成败以 herdr CLI 退出码判定（修复 send-text 失败仍报 "Prompt sent"
 -- 的假成功问题）。
@@ -77,12 +82,20 @@ local function probe_channel(pane_id)
 end
 
 local function agent_status_ready(status)
-  -- working 也视为就绪：提交交给 herdr 排队/steer，由其状态机处理
-  return status == "idle" or status == "working"
+  -- working 也视为就绪：提交交给 herdr 排队/steer，由其状态机处理。
+  -- unknown 同样视为就绪：屏幕识别型 agent（如 codex）回合结束后无法区分
+  -- composer 空闲与进行中，herdr 官方文档明确其会长期停在 unknown（idle /
+  -- working 均不可达，"waits for idle may time out"）——若不视为就绪，
+  -- agent wait 会无限超时、消息永久排队（codex 投递死锁）。
+  -- 语义安全：herdr 仅在 blocked 时拒绝提交（agent_blocked → 插件按失败
+  -- 处理、保留草稿），其余状态照常送入 composer
+  return status == "idle" or status == "working" or status == "unknown"
 end
 
 -- 就绪判定（返回 ready: true|false|nil, channel, status）：
--- 1) agent 通道：状态为 idle/working —— herdr 状态机的精确信号
+-- 1) agent 通道：状态为 idle/working/unknown —— herdr 状态机的精确信号
+--    （unknown 仅屏幕识别型 agent 出现，见 agent_status_ready；经 settle
+--    复查后提交，语义安全）
 -- 2) 文本通道（未注册 / 自定义工具 / 通道关闭）：前台进程启发式（原实现）
 local function check(pane_id)
   local channel, status = probe_channel(pane_id)
@@ -270,8 +283,11 @@ local function kick(pane_id)
     else
       st.fail_streak = 0
       if channel == "agent" then
-        -- 服务端精确等待：agent wait 直到 idle/working；分段超时避免无限阻塞。
-        -- 失败（超时 / agent_not_found）回到 step 重新探测，pane 消失由 fail_streak 兜底
+        -- 服务端精确等待。经 agent_status_ready 过滤后这里实际只服务 blocked
+        --（审批弹窗）：等其解除。匹配集含 unknown —— 屏幕识别型 agent（codex）
+        -- 弹窗被关掉后停在 unknown（idle 不可达），不含则每次都要白等一个
+        -- chunk 超时才能回 step 重探。分段超时避免无限阻塞；失败（超时 /
+        -- agent_not_found）回到 step 重新探测，pane 消失由 fail_streak 兜底
         waited = waited + wait_chunk
         warn_if_due()
         utils.exec_async({
@@ -283,6 +299,8 @@ local function kick(pane_id)
           "idle",
           "--until",
           "working",
+          "--until",
+          "unknown",
           "--timeout",
           tostring(wait_chunk),
         }, function(r)
@@ -324,9 +342,14 @@ function M.deliver(pane_id, tool, text, opts)
     -- 排队关闭：直接文本通道发送（旧版即发即忘行为，保留退出码判定）
     return dispatch_item(item, false, false)
   end
-  local ready, channel = check(pane_id)
+  local ready, channel, status = check(pane_id)
   if ready == true then
-    return dispatch_item(item, channel == "agent", false)
+    -- agent 通道的 unknown"就绪"带不确定性（可能是 TUI 启动中、或弹窗尚未
+    -- 被识别成 blocked 的短窗口），不立即提交：交给排队路径的 settle 复查
+    -- 收敛（settle_ms 后重探仍就绪才送出，期间变 blocked 则回到等待）
+    if channel ~= "agent" or status ~= "unknown" then
+      return dispatch_item(item, channel == "agent", false)
+    end
   end
   -- 未就绪 / 查询瞬时失败：排队交给轮询判定
   local st = ensure(pane_id)

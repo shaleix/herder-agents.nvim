@@ -332,9 +332,10 @@ utils.set_exec(function(argv)
 end)
 utils.set_exec_async(function(argv, on_done)
   table.insert(argv_log, argv)
-  -- 模拟服务端：agent wait 成功后该 pane 变为 idle
+  -- 模拟服务端：agent wait 成功后该 pane 解除为 unknown
+  --（codex 屏幕识别：弹窗关掉/回合结束后停在 unknown，idle 不可达）
   if argv[2] == "agent" and argv[3] == "wait" then
-    fake_agents[argv[4]] = "idle"
+    fake_agents[argv[4]] = "unknown"
   end
   on_done({ code = 0, stdout = "", stderr = "" })
 end)
@@ -407,27 +408,50 @@ check(
   "tab 提交走 send-keys tab"
 )
 
--- 4) 注册但状态 unknown → 排队，经 agent wait（服务端等待）后 flush
+-- 4) 注册但状态 unknown（codex 屏幕识别常态：回合结束后 idle 不可达）→
+--    排队经 settle 复查后直接 agent prompt 送出，不再走 agent wait
+--   （wait 等 idle/working 对 codex 永远超时，旧版因此消息永久排队死锁）
 delivery._reset()
 fake_agents = { ["p-unknown"] = "unknown" }
 argv_log = {}
 local ok_q = delivery.deliver("p-unknown", "codex", "queued hello", { submit_key = "enter" })
-check(ok_q == true and delivery.pending_count() == 1, "unknown 状态进入排队")
+check(ok_q == true and delivery.pending_count() == 1, "unknown 状态进入排队（settle 复查后送出）")
 vim.wait(3000, function()
   return delivery.pending_count() == 0
 end, 20)
-check(delivery.pending_count() == 0, "agent wait 就绪后自动 flush")
-check(
-  argv_contains(function(argv)
-    return argv[3] == "wait" and argv[4] == "p-unknown"
-  end),
-  "排队等待使用 herdr agent wait（服务端精确等待）"
-)
+check(delivery.pending_count() == 0, "unknown 经 settle 复查后自动 flush（不再死锁）")
+check(not argv_contains(function(argv)
+  return argv[3] == "wait"
+end), "unknown 不再调用 agent wait（旧版对 codex 无限超时）")
 check(
   argv_contains(function(argv)
     return argv[3] == "prompt" and argv[4] == "p-unknown"
   end),
-  "flush 后经 agent prompt 提交"
+  "unknown flush 后经 agent prompt 提交"
+)
+
+-- 4b) blocked（审批弹窗）→ 排队等待，不向弹窗送输入；弹窗解除（→ unknown）
+--     后经 agent wait 返回 + settle 复查，最终 agent prompt 送出
+delivery._reset()
+fake_agents = { ["p-blocked"] = "blocked" }
+argv_log = {}
+delivery.deliver("p-blocked", "codex", "hello", { submit_key = "enter" })
+check(delivery.pending_count() == 1, "blocked 状态进入排队（不向弹窗送输入）")
+vim.wait(4000, function()
+  return delivery.pending_count() == 0
+end, 20)
+check(delivery.pending_count() == 0, "blocked 解除后自动 flush")
+check(
+  argv_contains(function(argv)
+    return argv[3] == "wait" and argv[4] == "p-blocked" and vim.tbl_contains(argv, "unknown")
+  end),
+  "blocked 经 agent wait 等待（匹配集含 unknown）"
+)
+check(
+  argv_contains(function(argv)
+    return argv[3] == "prompt" and argv[4] == "p-blocked"
+  end),
+  "blocked 解除后经 agent prompt 提交"
 )
 
 -- 5) agent_channel = false → 一律文本通道（escape hatch）

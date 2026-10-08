@@ -126,19 +126,26 @@ borrowed from herdr-nvim):
 - When the target pane is a herdr-registered agent, submission goes through
   `herdr agent prompt`: the server presses Enter for you, understands the
   agent state machine, and refuses when the agent is blocked. Waiting uses
-  `herdr agent wait --until idle/working` (server-side, chunked timeouts)
-  instead of client-side polling.
+  `herdr agent wait --until idle/working/unknown` (server-side, chunked
+  timeouts) instead of client-side polling.
 - Unregistered panes and custom tools fall back to the text channel:
   `pane send-text` with per-tool bracketed-paste encoding plus a submit key.
   codex `/queue` (tab submit) and append-only sends always use the text
   channel. Set `delivery.agent_channel = false` to force the text channel
   everywhere.
-- A prompt is sent only once its pane is ready (agent status `idle`/`working`,
-  or a foreground process for the text channel), re-checked after a short
-  settle delay that skips the TUI initialization window — including prompts
-  submitted while the agent already looks ready. Until then it is queued and
-  delivered automatically once the agent is up. Startup screens no longer eat
-  your text.
+- A prompt is sent only once its pane is ready (agent status
+  `idle`/`working`/`unknown`, or a foreground process for the text channel),
+  re-checked after a short settle delay that skips the TUI initialization
+  window — including prompts submitted while the agent already looks ready.
+  Until then it is queued and delivered automatically once the agent is up.
+  Startup screens no longer eat your text.
+- Screen-detection agents like codex stay `unknown` after finishing a turn
+  (herdr cannot distinguish their idle composer from a running one and never
+  reports `idle`). `unknown` counts as ready: the prompt is submitted via
+  `herdr agent prompt` after the settle re-check — herdr still refuses if the
+  agent is actually blocked (approval dialog), keeping your draft for retry.
+  Before this, waiting for `idle`/`working` timed out forever and codex
+  prompts stayed permanently queued.
 - While prompts are queued (or settling), readiness polling spawns a
   short-lived `herdr` subprocess per tick (`delivery.poll_interval_ms`).
 - Delivery success is judged by the `herdr` CLI exit code. A failed
