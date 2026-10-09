@@ -3,7 +3,8 @@
 -- 借鉴 codex.nvim terminal.lua 的 pending_sends / composer-ready 机制，适配到
 -- herdr pane 场景；并优先使用 herdr 的 agent 集成原语（用法参考 herdr-nvim）：
 --   - 提交：`herdr agent prompt`（服务端替你按回车、理解 agent 状态机、
---     blocked 时拒绝提交），原文直传，不做 bracketed paste 编码
+--     blocked 时拒绝提交），原文直传，不做 bracketed paste 编码（仅结尾
+--     处于 @文件/$技能 补全态时补一个空格关闭补全，防止回车被补全吃掉）
 --   - 等待：`herdr agent wait --until idle/working/unknown`（状态机精确等待，
 --     分段超时，异步执行避免卡 UI）
 -- 仅对 herdr 已注册的 agent pane 生效（按 pane_id 在 agent list 中探测）；
@@ -130,12 +131,22 @@ local function finish_item(item, ok, queued)
 end
 
 -- 投递单条：
--- - agent 通道 + 回车提交 → `herdr agent prompt`（异步；原文直传，不编码）
+-- - agent 通道 + 回车提交 → `herdr agent prompt`（异步；原文直传，不编码，
+--   仅结尾处于 @文件/$技能 补全态时补一个空格关闭补全弹层，见下方注释）
 -- - 其余（文本通道 / tab 提交 / 只插入）→ send-text（按 paste_wrap 编码）+ 可选提交键
 -- on_settled 在该条完成后回调（agent 路径为异步完成），供串行 flush 链使用
 local function dispatch_item(item, use_agent, queued, on_settled)
   if use_agent and item.submit_key == "enter" then
-    utils.exec_async({ "herdr", "agent", "prompt", item.pane_id, item.text }, function(r)
+    -- 原文直传，但结尾处于 @文件/$技能 补全态时须补一个空格结束 token：
+    -- 服务端补按的回车否则会被 TUI 的"接受补全"吃掉 —— codex 附件块
+    -- （"Relate file:\n- @path"）以此结尾时消息不提交，composer 里只多出
+    -- 一个补全插入（@token 被替换 / 尾随空格）。文本通道的 paste 编码里
+    -- 一直有同样的处理（见 utils.bracketed_paste_encode）
+    local text = item.text
+    if utils.ends_in_completion_token(text) then
+      text = text .. " "
+    end
+    utils.exec_async({ "herdr", "agent", "prompt", item.pane_id, text }, function(r)
       if r.code ~= 0 then
         item.reason = (r.stderr ~= "" and r.stderr) or ("exit " .. r.code)
       end

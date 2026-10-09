@@ -210,6 +210,13 @@ M.reset_pane_terminal = function(pane_id)
   return M.exec({ "herdr", "pane", "send-text", pane_id, "\rprintf '" .. seqs .. "'\r" }).code == 0
 end
 
+-- 文本结尾是否处于 @文件 / $技能 补全态：注入此类文本后 TUI 会保持补全弹层
+-- 打开，紧随其后的回车会被"接受补全"吃掉而非提交 —— 需补一个空格结束
+-- token 让补全关闭（agent prompt 与文本通道共用同一判定）
+M.ends_in_completion_token = function(text)
+  return text:match("[@%$][%w%-%._/:]*$") ~= nil
+end
+
 -- bracketed paste 编码（原 ui/chat 实现，移至 utils 供 delivery 文本通道共用；
 -- agent prompt 通道不做此编码 —— 服务端自行处理输入注入）：
 -- - 多行文本用 ESC[200~...ESC[201~ 包裹，防止换行被 TUI 逐行当作回车提交
@@ -219,7 +226,7 @@ end
 M.bracketed_paste_encode = function(text)
   text = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("%z", "")
   text = text:gsub("\27%[201~", "[201~")
-  if text:match("[@%$][%w%-%._/:]*$") then
+  if M.ends_in_completion_token(text) then
     text = text .. " "
   end
   return "\27[200~" .. text .. "\27[201~"

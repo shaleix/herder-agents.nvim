@@ -371,6 +371,34 @@ check(not argv_contains(function(argv)
   return argv[3] == "send-text"
 end), "agent 通道不再走 send-text（无 paste 编码）")
 
+-- 1b) agent 通道 + 结尾 @文件（附件块形状）→ 原文补一个空格关补全
+-- （服务端补按的回车否则会被"接受补全"吃掉，消息不提交）
+fake_agents = { ["p-agent"] = "idle" }
+argv_log = {}
+delivery.deliver("p-agent", "codex", "review this\n\nRelate file:\n- @src/foo.lua", { submit_key = "enter" })
+check(
+  argv_contains(function(argv)
+    return argv[3] == "prompt" and argv[5] == "review this\n\nRelate file:\n- @src/foo.lua "
+  end),
+  "agent prompt：结尾 @token 补一个空格（关闭补全弹层）"
+)
+argv_log = {}
+delivery.deliver("p-agent", "codex", "- $my-skill", { submit_key = "enter" })
+check(
+  argv_contains(function(argv)
+    return argv[3] == "prompt" and argv[5] == "- $my-skill "
+  end),
+  "agent prompt：结尾 $技能 token 同样补空格"
+)
+argv_log = {}
+delivery.deliver("p-agent", "codex", "plain text ending.", { submit_key = "enter" })
+check(
+  argv_contains(function(argv)
+    return argv[3] == "prompt" and argv[5] == "plain text ending."
+  end),
+  "agent prompt：普通结尾原文直传不加空格"
+)
+
 -- 2) 未注册 pane（自定义工具）→ 文本通道：send-text + enter + paste 编码
 fake_agents = {}
 argv_log = {}
