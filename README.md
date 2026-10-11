@@ -247,6 +247,20 @@ opts = {
 }
 ```
 
+### Completion
+
+The prompt popup buffer uses filetype `aider-input`. If
+[blink.cmp](https://github.com/Saghen/blink.cmp) is installed, the plugin
+registers two sources for it by default — no user config needed:
+
+- `herder_skills` — triggered by `@`: completes opencode skills from
+  `opencode api skill.list`, each item carrying description/documentation
+- `herder_path` — file paths relative to the current working directory
+  (reuses blink.cmp's built-in path source)
+
+The skill list is fetched in the background when the popup opens and cached
+for `completion.skill_ttl` seconds. Disable with `completion = { enabled = false }`.
+
 ## API
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,

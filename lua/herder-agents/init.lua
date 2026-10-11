@@ -44,6 +44,8 @@ function M.setup(opts)
   vim.g.ai_tool = vim.g.ai_tool or config.options.default_tool
 
   require("herder-agents.ui.common").setup_highlights()
+  -- prompt 弹窗（aider-input）的 blink.cmp 补全注册（blink 未安装时静默跳过）
+  require("herder-agents.completion").setup()
   tools.register_herdr_tools()
   setup_commands()
   setup_keymaps()

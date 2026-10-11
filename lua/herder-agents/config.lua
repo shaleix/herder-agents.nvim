@@ -125,6 +125,14 @@ M.defaults = {
   -- prompt 输入弹窗尺寸
   chat_size = { width = 85, height = 35 },
 
+  -- 输入弹窗（aider-input filetype）补全：默认注册 blink.cmp 的 herder_skills
+  -- （opencode v2 API：opencode api skill.list，"@" 触发）与 herder_path
+  -- （复用 blink.cmp 内置 path source，按 cwd 补全文件路径）
+  completion = {
+    enabled = true,
+    skill_ttl = 300, -- skill 列表缓存秒数
+  },
+
   icons = {
     folder = "",
     collapse_marks = { "", "" },
