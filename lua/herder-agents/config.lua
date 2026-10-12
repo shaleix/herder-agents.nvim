@@ -258,13 +258,14 @@ function M.setup(opts)
 end
 
 ---@param name string
----@return string|nil cmd 启动命令覆盖（vim.g.ai_tool_cmd 优先于 tool_cmds）
+---@return string|nil cmd 启动命令（vim.g.ai_tool_cmd 优先于 tool_cmds，再回落 tools[name].cmd）
 function M.tool_cmd(name)
   local overrides = vim.g.ai_tool_cmd
   if type(overrides) == "table" and overrides[name] then
     return overrides[name]
   end
   return M.options.tool_cmds[name]
+    or (M.options.tools[name] or {}).cmd
 end
 
 ---@return string 当前工具（vim.g.ai_tool，未设置时回落 default_tool）
