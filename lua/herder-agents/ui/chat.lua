@@ -700,7 +700,7 @@ function M.add_prompt(range)
     return
   end
   local loc = note_loc_label(range)
-  local name = vim.g.ai_tool or config.options.default_tool
+  local name = config.current_tool()
   -- 注意：此处只能用 M.* 表访问（bind_tool_pane / deliver_prompt 等局部函数
   -- 定义在文件后方，直接引用会按全局 nil 解析）
   local verify_binding = M.bind_tool_pane(name)
@@ -846,11 +846,6 @@ local function herdr_cli_show_input(name, tool, default_value)
   -- 钉住本弹窗的目标工具，供 aider-input 补全源决定技能前缀（qodercli/omp 用 /name，codex 用 $name）
   vim.b[prompt_popup.bufnr].ai_tool = name
   setup_file_tree(content_popup, prompt_popup, layout, session)
-end
-
--- herdr 工具的确定顺序（config.setup 计算：默认序 + 用户新增按字母序）
-function M.herdr_tool_names()
-  return vim.list_extend({}, config.options.tool_order or {})
 end
 
 function M.show_input_tool(name, default_value)

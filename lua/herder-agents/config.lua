@@ -267,6 +267,23 @@ function M.tool_cmd(name)
   return M.options.tool_cmds[name]
 end
 
+---@return string 当前工具（vim.g.ai_tool，未设置时回落 default_tool）
+function M.current_tool()
+  return vim.g.ai_tool or M.options.default_tool
+end
+
+---@param name string
+---@return boolean ok 未注册（不在 tool_order）时通知并返回 false
+function M.set_current_tool(name)
+  if not vim.tbl_contains(M.options.tool_order or {}, name) then
+    vim.notify("Unknown AI tool: " .. name, vim.log.levels.ERROR, { title = "Herder Agents" })
+    return false
+  end
+  vim.g.ai_tool = name
+  vim.notify("AI tool switched to: " .. name, vim.log.levels.INFO)
+  return true
+end
+
 -- 取某功能当前绑定的 lhs（用于错误/提示消息，如 "use <leader>ho first"）；
 -- 未绑定时返回 fallback
 ---@param action string

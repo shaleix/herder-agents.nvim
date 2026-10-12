@@ -25,7 +25,7 @@ end
 function M.input_history_view(on_select)
   on_select = on_select
     or function(content)
-      require("herder-agents.ui.chat").show_input_tool(vim.g.ai_tool, content)
+      require("herder-agents.ui.chat").show_input_tool(config.current_tool(), content)
     end
   local history = load_history()
   local cwd = vim.fn.getcwd()

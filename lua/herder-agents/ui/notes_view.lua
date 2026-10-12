@@ -135,7 +135,7 @@ function M.show()
   -- 静默发进另一个会话（绑定语义见 ui.chat.bind_tool_pane）
   local chat = require("herder-agents.ui.chat")
   local panes = require("herder-agents.panes")
-  local bound_name = vim.g.ai_tool or config.options.default_tool
+  local bound_name = config.current_tool()
   local verify_binding = chat.bind_tool_pane(bound_name)
 
   local Popup = require("nui.popup")

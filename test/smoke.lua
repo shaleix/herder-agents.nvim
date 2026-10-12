@@ -61,7 +61,10 @@ check(has_map(" hM", "n"), "<leader>hM (n) 已注册")
 check(has_map(" hM", "x"), "<leader>hM (x) 已注册")
 check(has_map(" hm", "n"), "<leader>hm 已注册")
 check(not has_map(" hs", "n"), "未传入的动作不注册")
-check(plugin.register_tool == nil, "外部后端注册机制已移除（herdr-only）")
+check(
+  select(2, pcall(require, "herder-agents.tools")) ~= nil,
+  "外部后端注册机制已移除（herdr-only，tools.lua 已删除）"
+)
 
 -- commands
 local cmds = vim.api.nvim_get_commands({})
@@ -72,24 +75,24 @@ check(cmds.AISwitch ~= nil, ":AISwitch 已创建")
 check(vim.g.ai_tool == "opencode", "vim.g.ai_tool 默认 opencode")
 check(vim.o.autoread, "autoread 已开启")
 
--- 工具注册表
-local tools = require("herder-agents.tools")
-local names = tools.names()
+-- 工具列表（唯一表示：config.options.tool_order）
+local cfg = require("herder-agents.config")
+local names = cfg.options.tool_order
 check(names[1] == "opencode", "切换器首项为 opencode")
 check(vim.tbl_contains(names, "mycli"), "setup 新增工具 mycli 已注册")
 check(vim.tbl_contains(names, "hermes"), "默认工具 hermes 已注册")
-check(require("herder-agents.config").options.switch_replace == true, "switch_replace 默认开启")
+check(cfg.options.switch_replace == true, "switch_replace 默认开启")
 
 -- opencode 默认不配置 models：<leader>hm 走 model_switch 对话框兜底
-local oc_models = require("herder-agents.config").options.tools.opencode.models
+local oc_models = cfg.options.tools.opencode.models
 check(oc_models == nil, "opencode 默认不配置 models（走 model_switch 兜底）")
 
--- 工具切换
-check(tools.set("codex"), "set codex 成功")
+-- 工具切换（config.set_current_tool 校验 + 通知 + 写 vim.g.ai_tool）
+check(cfg.set_current_tool("codex"), "set codex 成功")
 check(vim.g.ai_tool == "codex", "vim.g.ai_tool 已切换")
-check(tools.backend() ~= nil, "backend() 返回 codex 后端")
-check(not tools.set("nonexistent"), "set 未知工具返回 false")
-check(tools.set("opencode"), "切回 opencode")
+check(cfg.current_tool() == "codex", "current_tool() 返回 codex")
+check(not cfg.set_current_tool("nonexistent"), "set 未知工具返回 false")
+check(cfg.set_current_tool("opencode"), "切回 opencode")
 
 -- api / 会话文件
 plugin.api.add_file("/tmp/herder-agents-smoke.lua")

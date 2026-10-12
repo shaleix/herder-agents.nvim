@@ -14,7 +14,6 @@
 local M = {}
 
 local config = require("herder-agents.config")
-local tools = require("herder-agents.tools")
 
 -- 前向声明（定义见文件后方，setup 引用）
 local setup_commands
@@ -24,12 +23,12 @@ local switch_to_tool
 -- 切换工具 = 切换 agent：守卫校验（旧 agent working/blocked 时先中断）→ 设置新工具 →
 -- 按 switch_replace 关闭旧 agent 并在原 pane 重启新工具（类似 codex model 切换流程）
 switch_to_tool = function(name)
-  local old = tools.current_name()
+  local old = config.current_tool()
   local replace = vim.env.HERDR_ENV == "1" and config.options.switch_replace and old ~= name
   if replace and not require("herder-agents.panes").can_replace(old) then
     return
   end
-  if tools.set(name) and replace then
+  if config.set_current_tool(name) and replace then
     require("herder-agents.panes").replace(old, name)
   end
 end
@@ -41,12 +40,13 @@ function M.setup(opts)
   if config.options.autoread then
     vim.o.autoread = true -- CLI 工具在外部 pane 改文件，buffer 自动重载
   end
-  vim.g.ai_tool = vim.g.ai_tool or config.options.default_tool
+  if vim.g.ai_tool == nil then
+    vim.g.ai_tool = config.options.default_tool
+  end
 
   require("herder-agents.ui.common").setup_highlights()
   -- prompt 弹窗（aider-input）的 blink.cmp 补全注册（blink 未安装时静默跳过）
   require("herder-agents.completion").setup()
-  tools.register_herdr_tools()
   setup_commands()
   setup_keymaps()
 
@@ -70,7 +70,7 @@ setup_commands = function()
     end, {
       nargs = "?",
       complete = function()
-        return tools.names()
+        return config.options.tool_order
       end,
       desc = "Toggle AI tool (same as " .. config.key_hint("toggle", "<leader>ho") .. ")",
     })
@@ -81,14 +81,14 @@ setup_commands = function()
       if opts.args ~= "" then
         switch_to_tool(opts.args)
       else
-        local names = tools.names()
-        local current_index = vim.fn.index(names, tools.current_name())
+        local names = config.options.tool_order
+        local current_index = vim.fn.index(names, config.current_tool())
         switch_to_tool(names[(current_index + 1) % #names + 1])
       end
     end, {
       nargs = "?",
       complete = function()
-        return tools.names()
+        return config.options.tool_order
       end,
       desc = "Switch AI tool",
     })
@@ -230,41 +230,41 @@ end
 
 ---@param tool string|nil 指定工具（如命令参数），缺省用当前工具
 function M.toggle(tool)
-  if tool and not tools.set(tool) then
+  if tool and not config.set_current_tool(tool) then
     return
   end
-  tools.backend().toggle()
+  require("herder-agents.panes").toggle(config.current_tool())
 end
 
 ---@param content string|nil 预填草稿的内容（如选区上下文）
 function M.input(content)
-  tools.backend().input(content)
+  require("herder-agents.ui.chat").show_input_tool(config.current_tool(), content)
 end
 
 function M.interrupt()
-  tools.backend().interrupt()
+  require("herder-agents.panes").interrupt(config.current_tool())
 end
 
 function M.new_session()
-  tools.backend().new()
+  require("herder-agents.panes").new_session(config.current_tool())
 end
 
 -- 切换当前工具的 agent 模式（opencode: Tab 循环 build/plan；codex: /approvals；
 -- 其余工具在 config.tools.<name>.mode_switch 里自定义 keys/cmd）
 function M.switch_mode()
-  local backend = tools.backend()
-  if backend and backend.switch_mode then
-    backend.switch_mode()
-  end
+  require("herder-agents.ui.chat").switch_tool_mode(config.current_tool())
 end
 
 function M.history()
-  tools.backend().history()
+  local name = config.current_tool()
+  require("herder-agents.ui.chat_history").input_history_view(function(content)
+    require("herder-agents.ui.chat").show_input_tool(name, content)
+  end)
 end
 
 -- 选择器切换工具（fzf-lua 可用时用 fzf，否则 vim.ui.select）
 function M.switch_tool()
-  local names = tools.names()
+  local names = config.options.tool_order
   local ok, fzf = pcall(require, "fzf-lua")
   if ok then
     fzf.fzf_exec(names, {
@@ -298,10 +298,7 @@ end
 -- （opencode 默认 API 原地切换；其余优雅退出 + model_resume 重启）；
 -- 未配置 models 的工具 → 按 model_switch 配置经 herdr 发送 keys/cmd 兜底
 function M.switch_model()
-  local backend = tools.backend()
-  if backend and backend.switch_model then
-    backend.switch_model()
-  end
+  require("herder-agents.ui.chat").switch_tool_model(config.current_tool())
 end
 
 -- ---------------------------------------------------------------------------
