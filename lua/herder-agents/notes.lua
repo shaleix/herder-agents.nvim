@@ -257,12 +257,6 @@ function M.sync_positions()
   end
 end
 
--- 命名空间 id（供测试 / 外部按需清除）
-M.ns_id = ns_id
-
--- 首行预览文本（notes_view 与 extmark 虚拟文本共用）
-M.preview_text = preview_text
-
 -- ---------------------------------------------------------------------------
 -- 缓冲区自动命令：文件（重新）显示时补齐备注 extmark
 -- augroup clear=true 保证幂等（本模块 require 一次即注册一次）

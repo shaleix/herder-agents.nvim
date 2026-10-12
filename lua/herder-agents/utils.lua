@@ -28,6 +28,8 @@ function M.get_relative_path(file_path)
   return relative_path
 end
 
+local sep_symbol = " > "
+
 local function find_symbol(symbols, line, col)
   for _, symbol in ipairs(symbols) do
     local range = symbol.range or (symbol.location and symbol.location.range)
@@ -46,7 +48,7 @@ local function find_symbol(symbols, line, col)
         child_symbol = find_symbol(symbol.children, line, col)
       end
       if child_symbol then
-        return symbol.name .. M.sep_symbol .. child_symbol
+        return symbol.name .. sep_symbol .. child_symbol
       else
         return symbol.name
       end
@@ -55,7 +57,7 @@ local function find_symbol(symbols, line, col)
     if symbol.children then
       local child = find_symbol(symbol.children, line, col)
       if child then
-        return symbol.name .. M.sep_symbol .. child
+        return symbol.name .. sep_symbol .. child
       end
     end
 
@@ -94,7 +96,7 @@ function M.get_current_path(callback, on_not_supported)
         if not symbol then
           return
         end
-        symbol = file_name .. M.sep_symbol .. symbol
+        symbol = file_name .. sep_symbol .. symbol
         if callback then
           callback(symbol)
         end
@@ -106,8 +108,6 @@ function M.get_current_path(callback, on_not_supported)
     end
   end)
 end
-
-M.sep_symbol = " > "
 
 -- ---------------------------------------------------------------------------
 -- CLI 执行基建（借鉴 herdr-nvim exec.lua 的注入模式）：

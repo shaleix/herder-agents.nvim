@@ -17,34 +17,6 @@ local function create(session_name)
   return s
 end
 
----@param cmd string
-function Session:send(cmd)
-  local prompt = ""
-
-  -- Add information about added files
-  if #self.added > 0 then
-    prompt = prompt .. "Modify files:\n"
-    for _, file in ipairs(self.added) do
-      prompt = prompt .. "- @" .. file .. "\n"
-    end
-    prompt = prompt .. "\n"
-  end
-
-  -- Add information about readonly files
-  if #self.readonly > 0 then
-    prompt = prompt .. "Read files:\n"
-    for _, file in ipairs(self.readonly) do
-      prompt = prompt .. "- @" .. file .. "\n"
-    end
-    prompt = prompt .. "\n"
-  end
-
-  -- Add the command content
-  prompt = prompt .. cmd
-
-  require("herder-agents.ui.chat").send_tool_prompt(vim.g.ai_tool, prompt)
-end
-
 function Session:clear_files()
   self.added = {}
   self.readonly = {}
