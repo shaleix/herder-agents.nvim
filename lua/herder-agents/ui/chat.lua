@@ -764,13 +764,8 @@ local function build_prompt_with_files(value)
   return (prompt:gsub("\n\n+$", "\n"))
 end
 
--- herdr CLI 封装已移至 utils.herdr_json（delivery / status 共用一份实现）
-local function herdr_cli(...)
-  return utils.herdr_json(...)
-end
-
 local function herdr_find_pane(label, tab_id)
-  local list = herdr_cli("pane", "list")
+  local list = utils.herdr_json("pane", "list")
   local panes = list and list.result and list.result.panes
   if not panes then
     return nil
@@ -784,7 +779,7 @@ local function herdr_find_pane(label, tab_id)
 end
 
 local function current_herdr_tab_id()
-  local current = herdr_cli("pane", "current")
+  local current = utils.herdr_json("pane", "current")
   local current_pane = current and current.result and current.result.pane
   return current_pane and current_pane.tab_id, current_pane
 end
@@ -811,7 +806,7 @@ local function toggle_cli_in_herdr_pane(cmd, label)
 
   local existing = herdr_find_pane(label, tab_id)
   if existing then
-    local layout = herdr_cli("pane", "layout", "--current")
+    local layout = utils.herdr_json("pane", "layout", "--current")
     local zoomed = layout and layout.result and layout.result.layout and layout.result.layout.zoomed
     if zoomed then
       utils.herdr_ok("pane", "zoom", "--off", "--current")
@@ -821,7 +816,7 @@ local function toggle_cli_in_herdr_pane(cmd, label)
     return
   end
 
-  local split = herdr_cli(
+  local split = utils.herdr_json(
     "pane",
     "split",
     "--current",
@@ -953,7 +948,7 @@ local function herdr_cli_interrupt(name, key)
   end
   local keys = type(key) == "table" and key or { key }
   local function send(i)
-    herdr_cli("pane", "send-keys", pane.pane_id, keys[i])
+    utils.herdr_json("pane", "send-keys", pane.pane_id, keys[i])
     if i < #keys then
       vim.defer_fn(function()
         send(i + 1)
@@ -1014,10 +1009,10 @@ local function focus_pane(pane_id)
     return false
   end
   for _, dir in ipairs({ "right", "left", "down", "up" }) do
-    local res = herdr_cli("pane", "neighbor", "--direction", dir, "--pane", self)
+    local res = utils.herdr_json("pane", "neighbor", "--direction", dir, "--pane", self)
     local nb = res and res.result and res.result.neighbor
     if nb and nb.neighbor_pane_id == pane_id then
-      herdr_cli("pane", "focus", "--direction", dir, "--pane", self)
+      utils.herdr_json("pane", "focus", "--direction", dir, "--pane", self)
       return true
     end
   end
@@ -1155,7 +1150,7 @@ function M.replace_tool(old_name, new_name)
   end
 
   if new_pane then
-    herdr_cli("pane", "close", old_pane.pane_id)
+    utils.herdr_json("pane", "close", old_pane.pane_id)
     utils.info("已关闭 " .. old_name .. " pane，当前 agent: " .. new_name)
     return true
   end
@@ -1164,7 +1159,7 @@ function M.replace_tool(old_name, new_name)
   utils.info("切换 agent：" .. old_name .. " → " .. new_name .. "，等待旧 agent 退出…")
 
   local function launch_new()
-    herdr_cli("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
+    utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
     -- 旧 agent（如 codex）进程退出后，其 TUI 清场仍可能迟到向 pane 输出一段特殊
     -- 字符，第一次 ctrl+c 赶在它们落进 shell 输入行之前；此外 TUI 可能遗留终端
     -- 私有模式（kitty keyboard / SGR 鼠标上报 / bracketed paste / 隐藏光标），
@@ -1176,9 +1171,9 @@ function M.replace_tool(old_name, new_name)
     vim.defer_fn(function()
       -- 复位生效后不再产生新的事件污染；printf 执行前排队迟到的事件再补一次
       -- ctrl+c 清行，保证启动命令落在一个干净的提示符上
-      herdr_cli("pane", "send-keys", pane_id, "ctrl+c")
-      herdr_cli("pane", "run", pane_id, new_cmd)
-      herdr_cli("pane", "rename", pane_id, new_name)
+      utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
+      utils.herdr_json("pane", "run", pane_id, new_cmd)
+      utils.herdr_json("pane", "rename", pane_id, new_name)
       poll(
         function()
           return pane_agent_running(pane_id) == true
@@ -1275,11 +1270,6 @@ end
 -- 内容停留在 TUI 输入框中，用户可继续编辑后手动提交（notes_view 的 <C-a> 使用）
 function M.append_tool_prompt(name, text, on_done)
   return deliver_to_tool(name, text, nil, on_done)
-end
-
--- 供 model_restart 等外部模块复用：执行 herdr CLI 并解析 JSON结果
-function M.herdr_exec(...)
-  return herdr_cli(...)
 end
 
 -- 供 model_restart 等外部模块复用：按 label 查找当前 tab 的 pane（找不到时给出提示）

@@ -202,8 +202,8 @@ end
 
 local function quit_agent(pane_id, quit_cmd, on_done)
   local function send_quit()
-    chat.herdr_exec("pane", "send-text", pane_id, quit_cmd)
-    chat.herdr_exec("pane", "send-keys", pane_id, "enter")
+    utils.herdr_json("pane", "send-text", pane_id, quit_cmd)
+    utils.herdr_json("pane", "send-keys", pane_id, "enter")
   end
   send_quit()
   -- agent 退出需等待 MCP/hook 清理，网络不佳时可达数十秒
@@ -226,7 +226,7 @@ local function quit_agent(pane_id, quit_cmd, on_done)
         return
       end
       -- quit 未生效（例如任务运行中弹了确认框），ctrl+c 兜底再等一轮
-      chat.herdr_exec("pane", "send-keys", pane_id, "ctrl+c")
+      utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
       poll(
         function()
           return pane_agent_gone(pane_id)
@@ -246,12 +246,12 @@ local function launch(pane_id, resume_args, on_done)
   -- TUI 还可能遗留 kitty keyboard / SGR 鼠标上报等终端私有模式，输入行会被
   -- 编码后的按键/鼠标事件持续污染、启动命令粘连成 "5:1uopencode" ——
   -- 先让 shell 执行 printf 复位载荷关掉这些模式（自带前导 \r 原子清行）
-  chat.herdr_exec("pane", "send-keys", pane_id, "ctrl+c")
+  utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
   utils.reset_pane_terminal(pane_id)
   vim.defer_fn(function()
     -- 复位已生效（不再产生新污染）；printf 执行前排队迟到的事件再补一次
     -- ctrl+c，随后启动命令落在干净提示符上（对齐 replace_tool 的经验）
-    chat.herdr_exec("pane", "send-keys", pane_id, "ctrl+c")
+    utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
     local args = { "herdr", "pane", "run", pane_id }
     vim.list_extend(args, resume_args)
     utils.exec(args)
