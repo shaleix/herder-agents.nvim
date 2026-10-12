@@ -184,6 +184,35 @@ M.herdr_ok = function(...)
   return M.exec({ "herdr", ... }).code == 0
 end
 
+--- 通用选择器：fzf-lua 可用时用 fzf（居中圆角浮窗），未安装时退回 vim.ui.select。
+--- 两条路径都恰好回调一次 on_select：选中传候选字符串，取消传 nil（调用方自行判空）
+---@param entries string[] 候选列表（字符串）
+---@param prompt string 选择器提示文案
+---@param on_select fun(choice: string|nil)
+function M.pick(entries, prompt, on_select)
+  local ok, fzf = pcall(require, "fzf-lua")
+  if ok then
+    fzf.fzf_exec(entries, {
+      prompt = prompt,
+      winopts = {
+        width = 0.45,
+        height = 0.4,
+        row = 0.5,
+        col = 0.5,
+        border = "rounded",
+      },
+      actions = {
+        ["default"] = function(selected)
+          on_select(selected and selected[1] or nil)
+        end,
+      },
+    })
+    return
+  end
+  -- fzf-lua 未安装：退回 vim.ui.select
+  vim.ui.select(entries, { prompt = prompt }, on_select)
+end
+
 -- ---------------------------------------------------------------------------
 -- 终端模式复位（agent 退出后、重启/切换新 agent 前调用）
 --

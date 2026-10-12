@@ -264,29 +264,7 @@ end
 
 -- 选择器切换工具（fzf-lua 可用时用 fzf，否则 vim.ui.select）
 function M.switch_tool()
-  local names = config.options.tool_order
-  local ok, fzf = pcall(require, "fzf-lua")
-  if ok then
-    fzf.fzf_exec(names, {
-      prompt = "AI Tool> ",
-      winopts = {
-        width = 0.4,
-        height = 0.35,
-        row = 0.5,
-        col = 0.5,
-        border = "rounded",
-      },
-      actions = {
-        ["default"] = function(selected)
-          if selected and selected[1] then
-            switch_to_tool(selected[1])
-          end
-        end,
-      },
-    })
-    return
-  end
-  vim.ui.select(names, { prompt = "AI Tool> " }, function(choice)
+  require("herder-agents.utils").pick(config.options.tool_order, "AI Tool> ", function(choice)
     if choice then
       switch_to_tool(choice)
     end
