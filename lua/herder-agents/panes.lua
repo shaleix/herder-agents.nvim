@@ -12,24 +12,53 @@ local delivery = require("herder-agents.delivery")
 -- 0.12 已移除 vim.list_unpack，勿再使用
 local unpack = unpack or table.unpack
 
-local function herdr_find_pane(label, tab_id)
+local function herdr_panes()
   local list = utils.herdr_json("pane", "list")
-  local panes = list and list.result and list.result.panes
-  if not panes then
-    return nil
-  end
-  for _, pane in ipairs(panes) do
-    if pane.label == label and (not tab_id or pane.tab_id == tab_id) then
-      return pane
-    end
-  end
-  return nil
+  return (list and list.result and list.result.panes) or {}
 end
 
 local function current_herdr_tab_id()
   local current = utils.herdr_json("pane", "current")
   local current_pane = current and current.result and current.result.pane
   return current_pane and current_pane.tab_id, current_pane
+end
+
+-- pane 的 cwd 与当前 nvim 工作目录是否同一目录（resolve 抹平 symlink 差异）
+local function pane_cwd_matches(pane)
+  if type(pane.cwd) ~= "string" or pane.cwd == "" then
+    return false
+  end
+  return vim.fn.resolve(pane.cwd) == vim.fn.resolve(vim.fn.getcwd())
+end
+
+-- 按工具名找 pane，三级匹配（toggle 找不到时会另 split 新实例，故尽量收编
+-- 既有 pane，避免同仓库连开多个 agent）：
+-- ① 当前 tab 内 label == 工具名 —— 插件 split 后 rename 过的 pane（原语义，
+--   cwd 不参与；①命中时 zoom-toggle 行为保持不变）
+-- ② 任意 tab 中 cwd 与当前目录一致且 label == 工具名 —— 跨 tab 复用同名 pane
+-- ③ 任意 tab 中 cwd 一致且 pane.agent == 工具名 —— herdr agent 集成的进程级
+--   检测（pane run 后秒内出现，无需 session），收编手工开 / 被改成自定义
+--   label（工单号等）的同仓库 agent pane；该级内有 agent_session 的优先
+local function find_tool_pane(name)
+  local tab_id = current_herdr_tab_id()
+  local by_label, by_session, by_agent = nil, nil, nil
+  for _, p in ipairs(herdr_panes()) do
+    if p.label == name and p.tab_id == tab_id then
+      return p
+    end
+    if pane_cwd_matches(p) then
+      if not by_label and p.label == name then
+        by_label = p
+      end
+      if p.agent == name then
+        if not by_session and p.agent_session then
+          by_session = p
+        end
+        by_agent = by_agent or p
+      end
+    end
+  end
+  return by_label or by_session or by_agent
 end
 
 local function toggle_cli_in_herdr_pane(cmd, label)
@@ -39,15 +68,24 @@ local function toggle_cli_in_herdr_pane(cmd, label)
     return
   end
 
-  local existing = herdr_find_pane(label, tab_id)
+  local existing = find_tool_pane(label)
   if existing then
-    local layout = utils.herdr_json("pane", "layout", "--current")
-    local zoomed = layout and layout.result and layout.result.layout and layout.result.layout.zoomed
-    if zoomed then
-      utils.herdr_ok("pane", "zoom", "--off", "--current")
-    else
-      utils.herdr_ok("pane", "zoom", "--on", "--pane", current_pane.pane_id)
+    if existing.tab_id == tab_id and existing.label == label then
+      -- 当前 tab 的插件 pane（label 命中）：保持 zoom-toggle 语义
+      local layout = utils.herdr_json("pane", "layout", "--current")
+      local zoomed = layout and layout.result and layout.result.layout and layout.result.layout.zoomed
+      if zoomed then
+        utils.herdr_ok("pane", "zoom", "--off", "--current")
+      else
+        utils.herdr_ok("pane", "zoom", "--on", "--pane", current_pane.pane_id)
+      end
+      return
     end
+    -- 既有 pane 在其他 tab，或是同 cwd 的自定义 label/手工开的 agent pane：
+    -- 切过去并放大该 pane，不重复 split 第二个实例
+    --（zoom 是 tab 内布局概念，跨 tab 只能切焦点）
+    utils.herdr_ok("tab", "focus", existing.tab_id)
+    utils.herdr_ok("pane", "zoom", "--on", "--pane", existing.pane_id)
     return
   end
 
@@ -79,8 +117,7 @@ local function toggle_cli_in_herdr_pane(cmd, label)
 end
 
 local function cli_pane(name)
-  local tab_id = current_herdr_tab_id()
-  local pane = herdr_find_pane(name, tab_id)
+  local pane = find_tool_pane(name)
   if not pane then
     local hint = config.key_hint("toggle", "<leader>ho")
     utils.err(name .. " pane not found; use " .. hint .. " first")
@@ -193,14 +230,16 @@ function M.relaunch(pane_id, cmd, opts, on_ready)
   end, 300)
 end
 
--- 当前 tab 内按 label 找工具 pane；找不到时提示（带 toggle 快捷键）
+-- 当前 tab 内按 label 找工具 pane；tab 内没有时按「同 cwd 的 label 命中 /
+-- herdr agent 检测命中」跨 tab 复用（见 find_tool_pane 三级匹配）；找不到时提示
 function M.find(name)
   return cli_pane(name)
 end
 
--- 静默查找（找不到不提示，返回 nil）；草稿绑定、发送前校验用
+-- 静默查找（找不到不提示，返回 nil）；草稿绑定、发送前校验用。
+-- 与 find 同规则（find_tool_pane 三级匹配）
 function M.lookup(name)
-  return herdr_find_pane(name, current_herdr_tab_id())
+  return find_tool_pane(name)
 end
 
 function M.toggle(name)
@@ -230,7 +269,7 @@ function M.can_replace(old_name)
   if vim.env.HERDR_ENV ~= "1" or not old_name then
     return true
   end
-  local pane = herdr_find_pane(old_name, current_herdr_tab_id())
+  local pane = find_tool_pane(old_name)
   if pane and (pane.agent_status == "working" or pane.agent_status == "blocked") then
     utils.warn(
       old_name
@@ -256,10 +295,11 @@ function M.replace(old_name, new_name)
     utils.err("agent 替换切换需要在 Herdr 中使用")
     return false
   end
-  local tab_id = current_herdr_tab_id()
   local new_cmd = config.tool_cmd(new_name) or new_name
-  local new_pane = herdr_find_pane(new_name, tab_id)
-  local old_pane = old_name and herdr_find_pane(old_name, tab_id) or nil
+  -- 新旧工具 pane 都按共享规则解析（当前 tab 优先，其次同 cwd 跨 tab），
+  -- 与 find/interrupt 等入口看到的是同一个 pane
+  local new_pane = find_tool_pane(new_name)
+  local old_pane = old_name and find_tool_pane(old_name) or nil
 
   if not old_pane then
     if not new_pane then
