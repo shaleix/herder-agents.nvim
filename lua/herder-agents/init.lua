@@ -26,11 +26,11 @@ local switch_to_tool
 switch_to_tool = function(name)
   local old = tools.current_name()
   local replace = vim.env.HERDR_ENV == "1" and config.options.switch_replace and old ~= name
-  if replace and not require("herder-agents.ui.chat").can_replace_tool(old) then
+  if replace and not require("herder-agents.panes").can_replace(old) then
     return
   end
   if tools.set(name) and replace then
-    require("herder-agents.ui.chat").replace_tool(old, name)
+    require("herder-agents.panes").replace(old, name)
   end
 end
 

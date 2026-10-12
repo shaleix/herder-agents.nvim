@@ -24,7 +24,7 @@
 local M = {}
 
 local utils = require("herder-agents.utils")
-local chat = require("herder-agents.ui.chat")
+local panes = require("herder-agents.panes")
 local config = require("herder-agents.config")
 local delivery = require("herder-agents.delivery")
 
@@ -241,34 +241,6 @@ local function quit_agent(pane_id, quit_cmd, on_done)
   )
 end
 
-local function launch(pane_id, resume_args, on_done)
-  -- agent 退出后 TUI 清场的迟到输出会落在 shell 输入行，先清行再 run；
-  -- TUI 还可能遗留 kitty keyboard / SGR 鼠标上报等终端私有模式，输入行会被
-  -- 编码后的按键/鼠标事件持续污染、启动命令粘连成 "5:1uopencode" ——
-  -- 先让 shell 执行 printf 复位载荷关掉这些模式（自带前导 \r 原子清行）
-  utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
-  utils.reset_pane_terminal(pane_id)
-  vim.defer_fn(function()
-    -- 复位已生效（不再产生新污染）；printf 执行前排队迟到的事件再补一次
-    -- ctrl+c，随后启动命令落在干净提示符上（对齐 replace_tool 的经验）
-    utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
-    local args = { "herdr", "pane", "run", pane_id }
-    vim.list_extend(args, resume_args)
-    utils.exec(args)
-    -- 就绪判断以前台进程为准（herdr 的 agent 集成检测有秒级延迟）
-    poll(
-      function()
-        return delivery.pane_agent_running(pane_id) == true
-      end,
-      500,
-      60,
-      function(ok)
-        on_done(ok)
-      end
-    )
-  end, 300)
-end
-
 --- 切换工具的 provider/model：平铺单选 → 按工具配置应用
 ---（model_apply = "api" 原地切换；否则优雅退出 → 按模板重启 resume）
 ---@param name string 工具名（config.tools 键）
@@ -283,7 +255,7 @@ function M.switch(name)
     utils.err("模型切换需要在 Herdr 中使用")
     return false
   end
-  local pane = chat.find_tool_pane(name)
+  local pane = panes.find(name)
   if not pane then
     return false
   end
@@ -361,18 +333,19 @@ function M.switch(name)
         utils.err(name .. " 未能捕获会话 id，agent 已退出；请手动重启: " .. manual)
         return
       end
-      launch(
+      panes.relaunch(
         pane.pane_id,
         substitute(resume_tpl, {
           session = session_id or "",
           provider = provider,
           model = model,
         }),
-        function(ready)
-          if ready then
-            utils.info(name .. " 已切换到 " .. target .. (session_id and " 并恢复会话" or ""))
-          else
+        nil,
+        function(err)
+          if err then
             utils.warn(name .. " 重启命令已发送，但未能确认就绪，请检查 pane")
+          else
+            utils.info(name .. " 已切换到 " .. target .. (session_id and " 并恢复会话" or ""))
           end
         end
       )

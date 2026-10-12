@@ -1,0 +1,337 @@
+-- herdr pane 适配器（按工具名驱动的 pane 机器，自 ui/chat 拆出）：
+-- 查找 / 启动切换 / 中断 / 新会话 / agent 替换（退出 → 同 pane 重启）的统一入口。
+-- 依赖单向：chat → panes ← model_restart，init/tools 直接调本模块，
+-- 任何模块都不再为 pane 操作 require ui/chat
+local M = {}
+
+local utils = require("herder-agents.utils")
+local config = require("herder-agents.config")
+local delivery = require("herder-agents.delivery")
+
+-- 兼容 LuaJIT(5.1) 全局 unpack 与 5.2+ 的 table.unpack；
+-- 0.12 已移除 vim.list_unpack，勿再使用
+local unpack = unpack or table.unpack
+
+local function herdr_find_pane(label, tab_id)
+  local list = utils.herdr_json("pane", "list")
+  local panes = list and list.result and list.result.panes
+  if not panes then
+    return nil
+  end
+  for _, pane in ipairs(panes) do
+    if pane.label == label and (not tab_id or pane.tab_id == tab_id) then
+      return pane
+    end
+  end
+  return nil
+end
+
+local function current_herdr_tab_id()
+  local current = utils.herdr_json("pane", "current")
+  local current_pane = current and current.result and current.result.pane
+  return current_pane and current_pane.tab_id, current_pane
+end
+
+local function toggle_cli_in_herdr_pane(cmd, label)
+  local tab_id, current_pane = current_herdr_tab_id()
+  if not current_pane then
+    utils.err("herdr pane current failed; are you inside Herdr?")
+    return
+  end
+
+  local existing = herdr_find_pane(label, tab_id)
+  if existing then
+    local layout = utils.herdr_json("pane", "layout", "--current")
+    local zoomed = layout and layout.result and layout.result.layout and layout.result.layout.zoomed
+    if zoomed then
+      utils.herdr_ok("pane", "zoom", "--off", "--current")
+    else
+      utils.herdr_ok("pane", "zoom", "--on", "--pane", current_pane.pane_id)
+    end
+    return
+  end
+
+  local split = utils.herdr_json(
+    "pane",
+    "split",
+    "--current",
+    "--direction",
+    config.options.split.direction,
+    "--ratio",
+    tostring(config.options.split.ratio),
+    "--no-focus",
+    "--cwd",
+    vim.fn.getcwd()
+  )
+  local pane_id = split and split.result and split.result.pane and split.result.pane.pane_id
+  if not pane_id then
+    utils.err("herdr pane split failed")
+    return
+  end
+  local args = { "pane", "run", pane_id }
+  for _, part in ipairs(vim.split(cmd, " ", { plain = true })) do
+    if part ~= "" then
+      table.insert(args, part)
+    end
+  end
+  utils.herdr_ok(unpack(args))
+  utils.herdr_ok("pane", "rename", pane_id, label)
+end
+
+local function cli_pane(name)
+  local tab_id = current_herdr_tab_id()
+  local pane = herdr_find_pane(name, tab_id)
+  if not pane then
+    local hint = config.key_hint("toggle", "<leader>ho")
+    utils.err(name .. " pane not found; use " .. hint .. " first")
+  end
+  return pane
+end
+
+local function herdr_cli_toggle(name, cmd)
+  if vim.env.HERDR_ENV ~= "1" then
+    utils.err(name .. " mode requires Herdr")
+    return
+  end
+  toggle_cli_in_herdr_pane(cmd or name, name)
+end
+
+-- 中断按键序列的逐键间隔：TUI 需把每个 Esc 解析成独立按键事件，同一次写入的
+-- esc esc 会被输入解析器合并（alt+esc / 转义序列），间隔发送等价于人工连按
+local INTERRUPT_KEY_DELAY_MS = 150
+
+-- key 为单键字符串或键序列 table；序列逐键间隔发送（opencode 两段式 Esc 中断：
+-- 第一次 Esc 只进入 "ESC again to interrupt" 待确认态，第二次才真正中断）
+local function herdr_cli_interrupt(name, key)
+  local pane = cli_pane(name)
+  if not pane then
+    return
+  end
+  local keys = type(key) == "table" and key or { key }
+  local function send(i)
+    utils.herdr_json("pane", "send-keys", pane.pane_id, keys[i])
+    if i < #keys then
+      vim.defer_fn(function()
+        send(i + 1)
+      end, INTERRUPT_KEY_DELAY_MS)
+    end
+  end
+  send(1)
+end
+
+local function herdr_cli_new_session(name, tool)
+  local pane = cli_pane(name)
+  if pane then
+    -- agent 未就绪（刚重启等）时排队，避免 /new 落进 shell
+    delivery.deliver(pane.pane_id, name, tool.new_cmd or "/clear", {
+      submit_key = "enter",
+      paste_wrap = tool.paste_wrap == true,
+    })
+  end
+end
+
+-- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI）
+local function poll(cond, interval_ms, max_ticks, on_done)
+  local tick = 0
+  local function step()
+    tick = tick + 1
+    local ok, res = pcall(cond, tick)
+    if ok and res then
+      on_done(true)
+      return
+    end
+    if tick >= max_ticks then
+      on_done(false)
+      return
+    end
+    vim.defer_fn(step, interval_ms)
+  end
+  vim.defer_fn(step, interval_ms)
+end
+
+-- 统一重启序列（收敛原 replace_tool 的 launch_new 与 model_restart 的 launch）：
+-- ctrl+c 清行 → 终端复位载荷 → +300ms 后补一次 ctrl+c → pane run →（可选改名）
+-- → 前台就绪轮询（统一 500ms × 60）→ on_ready(err)：成功为 nil，失败给原因。
+-- cmd：字符串按单个参数发给 pane run（与直接下发命令等价）；table 逐元素展开
+--（model_restart 的 model_resume 模板替换产物）
+function M.relaunch(pane_id, cmd, opts, on_ready)
+  opts = opts or {}
+  utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c") -- 清掉 shell 残留输入
+  -- 旧 agent（如 codex）进程退出后，其 TUI 清场仍可能迟到向 pane 输出一段特殊
+  -- 字符，第一次 ctrl+c 赶在它们落进 shell 输入行之前；此外 TUI 可能遗留终端
+  -- 私有模式（kitty keyboard / SGR 鼠标上报 / bracketed paste / 隐藏光标），
+  -- herdr 仍会把真实按键与鼠标事件编码成转义序列持续污染输入行
+  -- （"5:1u9;5:1uopencode" → command not found）。这些模式只能由 pane 内
+  -- 进程写 tty 输出侧复位 —— 先让 shell 执行一条 printf 复位载荷
+  --（自带前导 \r，与被污染行原子隔离），再启动新 agent
+  utils.reset_pane_terminal(pane_id)
+  vim.defer_fn(function()
+    -- 复位生效后不再产生新的事件污染；printf 执行前排队迟到的事件再补一次
+    -- ctrl+c 清行，保证启动命令落在一个干净的提示符上
+    utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
+    local args = { "pane", "run", pane_id }
+    if type(cmd) == "table" then
+      vim.list_extend(args, cmd)
+    else
+      table.insert(args, cmd)
+    end
+    utils.herdr_json(unpack(args))
+    if opts.rename then
+      utils.herdr_json("pane", "rename", pane_id, opts.rename)
+    end
+    -- 就绪判断以前台进程为准（herdr 的 agent 集成检测有秒级延迟）
+    poll(
+      function()
+        return delivery.pane_agent_running(pane_id) == true
+      end,
+      500,
+      60,
+      function(ok)
+        on_ready(ok and nil or "pane 前台进程未确认就绪（启动命令可能未生效）")
+      end
+    )
+  end, 300)
+end
+
+-- 当前 tab 内按 label 找工具 pane；找不到时提示（带 toggle 快捷键）
+function M.find(name)
+  return cli_pane(name)
+end
+
+-- 静默查找（找不到不提示，返回 nil）；草稿绑定、发送前校验用
+function M.lookup(name)
+  return herdr_find_pane(name, current_herdr_tab_id())
+end
+
+function M.toggle(name)
+  local tool = config.options.tools[name]
+  if tool then
+    herdr_cli_toggle(name, config.tool_cmd(name))
+  end
+end
+
+function M.interrupt(name)
+  local tool = config.options.tools[name]
+  if tool then
+    herdr_cli_interrupt(name, tool.interrupt_key or "ctrl+c")
+  end
+end
+
+function M.new_session(name)
+  local tool = config.options.tools[name]
+  if tool then
+    herdr_cli_new_session(name, tool)
+  end
+end
+
+-- 切换 agent 的前置检查：旧工具 agent 正在 working/blocked 时先中断再切
+--（与 codex model 切换的守卫一致；无 pane / 非 herdr 环境直接放行）
+function M.can_replace(old_name)
+  if vim.env.HERDR_ENV ~= "1" or not old_name then
+    return true
+  end
+  local pane = herdr_find_pane(old_name, current_herdr_tab_id())
+  if pane and (pane.agent_status == "working" or pane.agent_status == "blocked") then
+    utils.warn(
+      old_name
+        .. " 正在 "
+        .. pane.agent_status
+        .. "，请先用 "
+        .. config.key_hint("interrupt", "<leader>hx")
+        .. " 中断后再切换"
+    )
+    return false
+  end
+  return true
+end
+
+-- 切换 agent（类似 codex model 切换的"退出 → 同 pane 重启"流程）：
+-- 1. 新工具已有 pane → 直接关闭旧工具 pane（herdr 会一并结束其进程）
+-- 2. 否则优雅退出旧 pane 的 agent（TERM 前台进程组，卡住则 KILL），
+--    pane 回到 shell 后再补发 ctrl+c 清掉迟到的 TUI 清场残留，
+--    在同一 pane 启动新工具并改名（herdr 布局原位保持）
+-- 3. 旧工具无 pane → 新工具也无 pane 时按 split 流程新建（同 toggle）
+function M.replace(old_name, new_name)
+  if vim.env.HERDR_ENV ~= "1" then
+    utils.err("agent 替换切换需要在 Herdr 中使用")
+    return false
+  end
+  local tab_id = current_herdr_tab_id()
+  local new_cmd = config.tool_cmd(new_name) or new_name
+  local new_pane = herdr_find_pane(new_name, tab_id)
+  local old_pane = old_name and herdr_find_pane(old_name, tab_id) or nil
+
+  if not old_pane then
+    if not new_pane then
+      toggle_cli_in_herdr_pane(new_cmd, new_name)
+    end
+    return true
+  end
+
+  if new_pane then
+    utils.herdr_json("pane", "close", old_pane.pane_id)
+    utils.info("已关闭 " .. old_name .. " pane，当前 agent: " .. new_name)
+    return true
+  end
+
+  local pane_id = old_pane.pane_id
+  utils.info("切换 agent：" .. old_name .. " → " .. new_name .. "，等待旧 agent 退出…")
+
+  local function launch_new()
+    M.relaunch(pane_id, new_cmd, { rename = new_name }, function(err)
+      if err then
+        utils.warn("启动命令已发送，但未能确认 " .. new_name .. " 就绪，请检查 pane")
+      else
+        utils.info("已切换到 " .. new_name)
+      end
+    end)
+  end
+
+  local running, fgid = delivery.pane_agent_running(pane_id)
+  if not running then
+    launch_new() -- 旧 agent 已退出（pane 里是 shell），直接重启新的
+    return true
+  end
+
+  -- 优雅退出：TERM 前台进程组（负 pid = 进程组，shell 不在该组内不受影响）
+  if fgid then
+    vim.fn.system({ "kill", "-TERM", "-" .. tostring(fgid) })
+  end
+  poll(
+    function()
+      local r = delivery.pane_agent_running(pane_id)
+      return r == false or r == nil
+    end,
+    400,
+    25,
+    function(ok)
+      if ok then
+        launch_new()
+        return
+      end
+      -- TERM 未生效 → KILL 强杀再等一轮
+      local _, fg2 = delivery.pane_agent_running(pane_id)
+      if fg2 then
+        vim.fn.system({ "kill", "-KILL", "-" .. tostring(fg2) })
+      end
+      poll(
+        function()
+          local r = delivery.pane_agent_running(pane_id)
+          return r == false or r == nil
+        end,
+        400,
+        15,
+        function(ok2)
+          if ok2 then
+            launch_new()
+          else
+            utils.err(old_name .. " 未能退出，已放弃切换；请手动检查 pane")
+          end
+        end
+      )
+    end
+  )
+  return true
+end
+
+return M

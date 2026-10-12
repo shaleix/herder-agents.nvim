@@ -6,6 +6,7 @@
 local M = {}
 
 local chat = require("herder-agents.ui.chat")
+local panes = require("herder-agents.panes")
 local config = require("herder-agents.config")
 local utils = require("herder-agents.utils")
 
@@ -24,7 +25,7 @@ function M.register_herdr_tools()
   for _, name in ipairs(chat.herdr_tool_names()) do
     register(name, {
       toggle = function()
-        chat.toggle_tool(name)
+        panes.toggle(name)
       end,
       input = function(content)
         chat.show_input_tool(name, content)
@@ -35,10 +36,10 @@ function M.register_herdr_tools()
         end)
       end,
       interrupt = function()
-        chat.interrupt_tool(name)
+        panes.interrupt(name)
       end,
       new = function()
-        chat.new_tool_session(name)
+        panes.new_session(name)
       end,
       switch_mode = function()
         chat.switch_tool_mode(name)

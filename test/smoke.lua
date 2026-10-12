@@ -546,7 +546,7 @@ status_mod._reset()
 -- 中断按键序列：opencode 两段式 Esc（第一次 Esc 只进入 "ESC again to interrupt"
 -- 待确认态，第二次才真正中断），第二键经 defer 间隔发送；单键工具不受影响
 -- ---------------------------------------------------------------------------
-local chat_mod = require("herder-agents.ui.chat")
+local panes = require("herder-agents.panes")
 local fake_panes = {
   { label = "opencode", tab_id = "t1", pane_id = "p-oc" },
   { label = "omp", tab_id = "t1", pane_id = "p-omp" },
@@ -569,7 +569,7 @@ utils.set_exec_async(function(argv, on_done)
   on_done({ code = 0, stdout = "", stderr = "" })
 end)
 
-chat_mod.interrupt_tool("opencode")
+panes.interrupt("opencode")
 check(#send_keys_log == 1 and send_keys_log[1].key == "esc", "opencode 中断立即发出第一个 esc")
 local seq_done = vim.wait(2000, function()
   return #send_keys_log >= 2
@@ -584,7 +584,7 @@ check(
 )
 
 send_keys_log = {}
-chat_mod.interrupt_tool("omp")
+panes.interrupt("omp")
 vim.wait(600, function()
   return false
 end)
@@ -896,7 +896,7 @@ utils.set_exec(function(argv)
   return { code = 0, stdout = "" }
 end)
 
-check(chat_mod.replace_tool("codex", "opencode") == true, "旧 agent 已退出时直接走同 pane 重启分支")
+check(panes.replace("codex", "opencode") == true, "旧 agent 已退出时直接走同 pane 重启分支")
 local sw_done = vim.wait(4000, function()
   for _, e in ipairs(sw_log) do
     if e:sub(1, 4) == "run:" then

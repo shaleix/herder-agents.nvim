@@ -134,6 +134,7 @@ function M.show()
   -- 切工具 / replace_tool 复用 pane 时拒绝发送，备注保留，防止把 review 注释
   -- 静默发进另一个会话（绑定语义见 ui.chat.bind_tool_pane）
   local chat = require("herder-agents.ui.chat")
+  local panes = require("herder-agents.panes")
   local bound_name = vim.g.ai_tool or config.options.default_tool
   local verify_binding = chat.bind_tool_pane(bound_name)
 
@@ -240,7 +241,7 @@ function M.show()
       utils.warn("Nothing to send: no checked notes and empty Extra Prompt")
       return
     end
-    local pane = chat.lookup_tool_pane(bound_name)
+    local pane = panes.lookup(bound_name)
     if not pane then
       utils.err(bound_name .. " pane not found; notes kept")
       return
