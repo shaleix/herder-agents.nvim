@@ -50,7 +50,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | Binding | Action |
 | --- | --- |
 | `<leader>ho` | open/close the tool's herdr pane (toggles zoom when open) |
-| `<leader>h<` | width toggle: shrink the nvim pane to `toggle_ratio` (default 32%) so the adjacent agent pane widens; press again to restore the remembered baseline ratio (kept per nvim session in `vim.g`; zoomed or non-adjacent layouts are refused with a hint — herdr clamps the minimum width) |
+| `<leader>h<` | width toggle: switch the nvim/agent boundary between `toggle_ratio` (default 32%, nvim shrunk) and the default split ratio `split.ratio` (default 55%); stateless — currently ≈ `toggle_ratio` restores the default ratio, anything else (manual widths, narrower leftovers) snaps back to `toggle_ratio`; zoomed or non-adjacent layouts are refused with a hint — herdr clamps the minimum width |
 | `<leader>he` | prompt popup (visual mode prefills the selection as context) |
 | `<leader>hx` | interrupt |
 | `<leader>hc` | new session |
@@ -117,7 +117,7 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 
 - `:AIToggle [tool]` — toggle, callable from external scripts (worktree hooks)
 - `:AISwitch [tool]` — switch tool (no argument cycles); like `<leader>ht`, replaces the agent pane
-- `:HerdrShrinkToggle` — width toggle: shrink the nvim pane to `toggle_ratio` / restore the baseline (same as `keys.shrink_toggle`)
+- `:HerdrShrinkToggle` — width toggle: switch between `toggle_ratio` and the default split ratio (same as `keys.shrink_toggle`)
 - `:AIDropQueue` — drop prompts queued while no agent was ready
 
 ## Prompt delivery

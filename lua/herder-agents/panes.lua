@@ -251,14 +251,15 @@ end
 
 -- ---------------------------------------------------------------------------
 -- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：
--- nvim pane 与当前工具 agent pane 左右相邻时，把两者的分界在「当前比例」与
--- toggle_ratio 间来回切。amount 语义为共同 split 的比例差（herdr resize
--- --amount 实测为 0~1 比例，且服务端自带最小宽度 clamp）；比例基准 =
--- nvim 宽 / (nvim + agent 宽)（相邻即共同 split 的两个直接子节点）。
--- 收窄前的基准比例存 vim.g（按 nvim pane id 绑定）；nvim 重启后遗忘，
--- 首按把当前比例记为基准再收窄。
+-- nvim pane 与当前工具 agent pane 左右相邻时，把两者的分界在两个固定锚点间
+-- 来回切：收窄锚点 toggle_ratio ↔ 默认分屏比例 split.ratio（<leader>ho split
+-- 出的默认布局）。不记忆按压时的比例 —— 曾按「按压时比例」记基准存 vim.g，
+-- 窄态（< toggle_ratio）按压或连按未落定时基准被污染成窄值，「恢复」反而
+-- 收窄（16%↔32% 死循环）；固定锚点无状态，任何宽度一按即回锚点、自愈。
+-- amount 语义为共同 split 的比例差（herdr resize --amount 实测为 0~1 比例，
+-- 且服务端自带最小宽度 clamp）；比例基准 = nvim 宽 / (nvim + agent 宽)
+-- （相邻即共同 split 的两个直接子节点）。
 -- ---------------------------------------------------------------------------
-local SHRINK_STATE = "herd_shrink_state"
 
 local function current_tab_layout()
   local res = utils.herdr_json("pane", "layout", "--current")
@@ -335,26 +336,15 @@ function M.shrink_toggle(name)
     return
   end
 
-  local target = config.options.toggle_ratio
+  -- 当前 ≈ 收窄锚点 → 恢复默认分屏比例；其余（手动调宽 / 更窄的污染态 /
+  -- 默认布局）一律切到收窄锚点
+  local shrunk = config.options.toggle_ratio
   local current = nvim_rect.width / (nvim_rect.width + agent_rect.width)
-  local state = vim.g[SHRINK_STATE]
-  -- 已收窄（当前 ≈ toggle_ratio 且有基准）→ 恢复；否则记基准并收窄。
-  -- 手动改过宽度（两者皆不匹配）按收窄处理，基准更新为手调值
-  local restoring = type(state) == "table"
-    and state.pane == current_pane.pane_id
-    and type(state.baseline) == "number"
-    and math.abs(current - target) <= 0.02
-  if restoring then
-    target = state.baseline
-  else
-    vim.g[SHRINK_STATE] = { pane = current_pane.pane_id, baseline = current }
-  end
+  local restoring = math.abs(current - shrunk) <= 0.02
+  local target = restoring and config.options.split.ratio or shrunk
 
   local delta = target - current
   if math.abs(delta) < 0.005 then
-    if restoring then
-      vim.g[SHRINK_STATE] = nil
-    end
     utils.info("已在目标宽度")
     return
   end
@@ -382,8 +372,10 @@ function M.shrink_toggle(name)
     return
   end
   if restoring then
-    vim.g[SHRINK_STATE] = nil
-    utils.info(string.format("nvim pane 宽度已恢复（%d%%）", math.floor(target * 100 + 0.5)))
+    utils.info(string.format("nvim pane 宽度已恢复默认分屏比例（%d%%）", math.floor(target * 100 + 0.5)))
+  elseif delta > 0 then
+    -- 从更窄的宽度（手动收窄/连按叠加）回到收窄锚点，实为放大
+    utils.info(string.format("nvim pane 宽度已放大到 %d%%", math.floor(target * 100 + 0.5)))
   else
     utils.info(string.format("nvim pane 已收窄到 %d%%", math.floor(target * 100 + 0.5)))
   end

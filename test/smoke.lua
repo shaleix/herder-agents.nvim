@@ -800,9 +800,11 @@ else
 end
 
 -- ---------------------------------------------------------------------------
--- 宽度 toggle（:HerdrShrinkToggle）：nvim 与左右相邻 agent pane 的分界在
--- 「当前比例」与 toggle_ratio（默认 0.35）间切换；收窄前比例存 vim.g，
--- 再按恢复；zoomed / 跨 tab / 不相邻时守卫拦截
+-- 宽度 toggle（:HerdrShrinkToggle）：nvim 与左右相邻 agent pane 的分界在两个
+-- 固定锚点间切换：toggle_ratio（默认 0.32）↔ 默认分屏比例 split.ratio（默认
+-- 0.55）。无状态：曾按「按压时比例」记基准存 vim.g，窄态按压/连按未落定会把
+-- 基准污染成窄值，「恢复」反而收窄（16%↔32% 死循环）；zoomed / 跨 tab /
+-- 不相邻时守卫拦截
 -- ---------------------------------------------------------------------------
 vim.env.HERDR_ENV = "1"
 local function mk_layout_fake(pane_tbl, layout_tbl, cur_tab, cur_pane_id)
@@ -863,7 +865,6 @@ end
 -- 首按：收窄 0.65 → 0.32（agent 在右 → direction left，amount = 0.33）
 local st_exec, st_log, st_clear = mk_layout_fake(st_panes, layout_of(130, 70), "t2", "p-nvim")
 utils.set_exec(st_exec)
-vim.g.herd_shrink_state = nil
 panes.shrink_toggle("opencode")
 local st_calls = resize_calls(st_log)
 check(
@@ -873,23 +874,17 @@ check(
     and st_calls[1]["--amount"] == "0.3300",
   "宽度 toggle：首按收窄（resize 发给 agent pane，方向/比例差正确）"
 )
-check(
-  type(vim.g.herd_shrink_state) == "table"
-    and vim.g.herd_shrink_state.pane == "p-nvim"
-    and math.abs(vim.g.herd_shrink_state.baseline - 0.65) < 0.001,
-  "宽度 toggle：收窄前基准 0.65 已存 vim.g"
-)
+check(vim.g.herd_shrink_state == nil, "宽度 toggle：固定锚点切换，不写 vim.g 基准")
 
--- 再按：恢复 0.32 → 0.65（direction right），成功后清 state
+-- 再按：0.32 → 默认分屏比例 0.55（direction right，amount = 0.55-0.32）
 local st2_exec, st2_log = mk_layout_fake(st_panes, layout_of(64, 136), "t2", "p-nvim")
 utils.set_exec(st2_exec)
 panes.shrink_toggle("opencode")
 st_calls = resize_calls(st2_log)
 check(
-  #st_calls == 1 and st_calls[1]["--direction"] == "right" and st_calls[1]["--amount"] == "0.3300",
-  "宽度 toggle：再按恢复（方向反转、回到基准比例）"
+  #st_calls == 1 and st_calls[1]["--direction"] == "right" and st_calls[1]["--amount"] == "0.2300",
+  "宽度 toggle：再按恢复默认分屏比例 0.55（方向反转）"
 )
-check(vim.g.herd_shrink_state == nil, "宽度 toggle：恢复后清除基准状态")
 
 -- agent 在左侧的镜像：nvim x=70 w=130，agent x=0 w=70 → 收窄 direction right
 local mirror_layout = {
@@ -899,7 +894,6 @@ local mirror_layout = {
     { pane_id = "p-agent", rect = { x = 0, y = 0, width = 70, height = 60 } },
   },
 }
-vim.g.herd_shrink_state = nil
 local mi_exec, mi_log = mk_layout_fake(st_panes, mirror_layout, "t2", "p-nvim")
 utils.set_exec(mi_exec)
 panes.shrink_toggle("opencode")
@@ -907,7 +901,6 @@ local mi_calls = resize_calls(mi_log)
 check(#mi_calls == 1 and mi_calls[1]["--direction"] == "right", "宽度 toggle：agent 在左时方向镜像")
 
 -- 守卫：zoomed → 不 resize
-vim.g.herd_shrink_state = nil
 local zm_exec, zm_log = mk_layout_fake(st_panes, { zoomed = true, panes = layout_of(130, 70).panes }, "t2", "p-nvim")
 utils.set_exec(zm_exec)
 panes.shrink_toggle("opencode")
@@ -948,7 +941,6 @@ local function divider_layout(nvim_w, agent_w)
 end
 
 -- 首按：134/244 ≈ 0.5492 → 收窄到 0.32（agent 在右 → direction left，amount 0.2292）
-vim.g.herd_shrink_state = nil
 local dv_exec, dv_log = mk_layout_fake(st_panes, divider_layout(134, 110), "t2", "p-nvim")
 utils.set_exec(dv_exec)
 panes.shrink_toggle("opencode")
@@ -960,24 +952,29 @@ check(
     and dv_calls[1]["--amount"] == "0.2292",
   "宽度 toggle：1 列 divider 相邻（agent 右）首按收窄（真实布局回归）"
 )
-check(
-  type(vim.g.herd_shrink_state) == "table" and math.abs(vim.g.herd_shrink_state.baseline - 134 / 244) < 0.001,
-  "宽度 toggle：divider 布局收窄前基准 134/244 已存 vim.g"
-)
-
--- 再按：布局变为 nvim 78 / agent 166（x=79，仍隔 1 列）→ 恢复到基准比例
+-- 再按：布局变为 nvim 78 / agent 166（x=79，仍隔 1 列）→ 恢复默认分屏比例 0.55
 local rv_exec, rv_log = mk_layout_fake(st_panes, divider_layout(78, 166), "t2", "p-nvim")
 utils.set_exec(rv_exec)
 panes.shrink_toggle("opencode")
 local rv_calls = resize_calls(rv_log)
 check(
-  #rv_calls == 1 and rv_calls[1]["--direction"] == "right" and rv_calls[1]["--amount"] == "0.2295",
-  "宽度 toggle：1 列 divider 再按恢复（方向反转、回到基准）"
+  #rv_calls == 1 and rv_calls[1]["--direction"] == "right" and rv_calls[1]["--amount"] == "0.2303",
+  "宽度 toggle：1 列 divider 再按恢复默认分屏比例（方向反转）"
 )
-check(vim.g.herd_shrink_state == nil, "宽度 toggle：divider 布局恢复后清除基准状态")
+
+-- 自愈回归：窄态（16%，曾被记成基准导致 16%↔32% 死循环）按压 → 直接切到
+-- 32%（实为放大），不记忆 16%；再按回到默认 55%（上例），而非 16%
+local nh_exec, nh_log = mk_layout_fake(st_panes, divider_layout(39, 205), "t2", "p-nvim")
+utils.set_exec(nh_exec)
+panes.shrink_toggle("opencode")
+local nh_calls = resize_calls(nh_log)
+check(
+  #nh_calls == 1 and nh_calls[1]["--direction"] == "right" and nh_calls[1]["--amount"] == "0.1602",
+  "宽度 toggle：窄态 16% 按压自愈切到 32%（放大，不记窄基准）"
+)
+check(vim.g.herd_shrink_state == nil, "宽度 toggle：窄态按压后仍不写 vim.g 基准")
 
 -- agent 在左镜像：agent x=0 w=110，nvim x=111 w=134 → 收窄 direction right
-vim.g.herd_shrink_state = nil
 local ml_layout = {
   zoomed = false,
   panes = {
@@ -995,7 +992,6 @@ check(
 )
 
 -- 守卫：gap > 1（2 列无法归因于分界线）→ 不 resize
-vim.g.herd_shrink_state = nil
 local g2_layout = divider_layout(134, 110)
 g2_layout.panes[2].rect.x = 136 -- nvim 右缘 134，agent 左缘 136
 local g2_exec, g2_log = mk_layout_fake(st_panes, g2_layout, "t2", "p-nvim")
@@ -1049,7 +1045,6 @@ plugin.setup({
 })
 check(has_map(" h<", "n"), "传入 shrink_toggle 键后注册 <leader>h<")
 
-vim.g.herd_shrink_state = nil
 utils.set_exec(nil)
 utils.set_exec_async(nil)
 if saved_env then

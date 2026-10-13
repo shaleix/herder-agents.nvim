@@ -114,8 +114,9 @@ M.defaults = {
   -- herdr 分屏参数
   split = { direction = "right", ratio = 0.55 },
 
-  -- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）收窄时，
-  -- nvim pane 占所在 split 的目标比例（agent 占其余）
+  -- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）的收窄锚点：
+  -- nvim pane 占所在 split 的目标比例（agent 占其余）；再按恢复默认
+  -- 分屏比例（上面的 split.ratio），两锚点固定来回切换
   toggle_ratio = 0.32,
 
   -- 切换工具（<leader>ht / :AISwitch）时关闭当前 agent，并在原 pane 重启新工具
@@ -220,7 +221,7 @@ M.defaults = {
     -- notes_view = "<leader>hr", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
     -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
     -- model = "<leader>hm", -- 切换模型（models 配置驱动重启 / model_switch 兜底）
-    -- shrink_toggle = "<leader>h<", -- 宽度 toggle：nvim 与 agent 分界在当前比例与 toggle_ratio 间切换
+    -- shrink_toggle = "<leader>h<", -- 宽度 toggle：nvim 与 agent 分界在 toggle_ratio 与默认分屏比例（split.ratio）间切换
   },
 }
 
