@@ -276,19 +276,27 @@ end
 
 -- 左右相邻判定：共享一条竖直分界。agent 在 nvim 右侧返回 "right"，左侧返回
 -- "left"；上下布局 / 嵌套不相邻返回 nil（不支持，提示手动调整，避免推错
--- 边界压到无关 pane）
+-- 边界压到无关 pane）。
+-- herdr 在左右相邻 pane 间画 1 列分界线（实测 nvim 宽 134、agent x=135、
+-- area.width=245=134+1+110），rect 边缘相差 0（无分界）或 1（分界线）才算
+-- 相邻；相差 ≥2 说明中间还有其他内容（无关 pane / 更宽分界），按不相邻处理。
+-- 垂直跨度要求完全一致（同 y 同高）：共同 split 的两个直接子节点必然如此，
+-- 收窄的比例基准（nvim/(nvim+agent)）与单条分界的 resize 才成立；仅部分
+-- 重叠属嵌套布局，返回 nil
 local function adjacent_side(nvim_rect, agent_rect)
   if not (nvim_rect and agent_rect) then
     return nil
   end
-  local same_band = nvim_rect.y < agent_rect.y + agent_rect.height and agent_rect.y < nvim_rect.y + nvim_rect.height
-  if not same_band then
+  if not (nvim_rect.y == agent_rect.y and nvim_rect.height == agent_rect.height) then
     return nil
   end
-  if nvim_rect.x + nvim_rect.width == agent_rect.x then
+  local DIVIDER_COLS = 1
+  local right_gap = agent_rect.x - (nvim_rect.x + nvim_rect.width)
+  if right_gap == 0 or right_gap == DIVIDER_COLS then
     return "right"
   end
-  if agent_rect.x + agent_rect.width == nvim_rect.x then
+  local left_gap = nvim_rect.x - (agent_rect.x + agent_rect.width)
+  if left_gap == 0 or left_gap == DIVIDER_COLS then
     return "left"
   end
   return nil
