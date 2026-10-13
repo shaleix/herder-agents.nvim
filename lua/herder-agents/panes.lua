@@ -371,14 +371,7 @@ function M.shrink_toggle(name)
     utils.info("宽度已到边界，未变化")
     return
   end
-  if restoring then
-    utils.info(string.format("nvim pane 宽度已恢复默认分屏比例（%d%%）", math.floor(target * 100 + 0.5)))
-  elseif delta > 0 then
-    -- 从更窄的宽度（手动收窄/连按叠加）回到收窄锚点，实为放大
-    utils.info(string.format("nvim pane 宽度已放大到 %d%%", math.floor(target * 100 + 0.5)))
-  else
-    utils.info(string.format("nvim pane 已收窄到 %d%%", math.floor(target * 100 + 0.5)))
-  end
+  -- 成功的 resize 屏幕上直接可见，不弹通知；仅拦截 / 未变化的情形提示
 end
 
 function M.interrupt(name)

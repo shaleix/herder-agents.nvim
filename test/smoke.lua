@@ -952,6 +952,29 @@ check(
     and dv_calls[1]["--amount"] == "0.2292",
   "宽度 toggle：1 列 divider 相邻（agent 右）首按收窄（真实布局回归）"
 )
+
+-- 成功的宽度调整屏幕直接可见，不弹通知；拦截类守卫仍提示（否则不知道为何没反应）
+local saved_notify = vim.notify
+local notify_log = {}
+vim.notify = function(msg)
+  table.insert(notify_log, tostring(msg))
+end
+local q_exec, q_log = mk_layout_fake(st_panes, divider_layout(134, 110), "t2", "p-nvim")
+utils.set_exec(q_exec)
+panes.shrink_toggle("opencode")
+check(
+  #resize_calls(q_log) == 1 and #notify_log == 0,
+  "宽度 toggle：成功收窄不弹通知（屏幕直接可见）"
+)
+local q2_exec, q2_log = mk_layout_fake(st_panes, divider_layout(78, 166), "t2", "p-nvim")
+utils.set_exec(q2_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(q2_log) == 1 and #notify_log == 0, "宽度 toggle：成功恢复默认比例不弹通知")
+local q3_exec, q3_log = mk_layout_fake(st_panes, stacked_layout, "t2", "p-nvim")
+utils.set_exec(q3_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(q3_log) == 0 and #notify_log >= 1, "宽度 toggle：不相邻拦截仍弹提示")
+vim.notify = saved_notify
 -- 再按：布局变为 nvim 78 / agent 166（x=79，仍隔 1 列）→ 恢复默认分屏比例 0.55
 local rv_exec, rv_log = mk_layout_fake(st_panes, divider_layout(78, 166), "t2", "p-nvim")
 utils.set_exec(rv_exec)
