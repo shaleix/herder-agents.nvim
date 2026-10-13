@@ -115,8 +115,8 @@ M.defaults = {
   split = { direction = "right", ratio = 0.55 },
 
   -- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）的收窄锚点：
-  -- nvim pane 占所在 split 的目标比例（agent 占其余）；再按恢复默认
-  -- 分屏比例（上面的 split.ratio），两锚点固定来回切换
+  -- nvim pane 占当前 tab 全部 pane 总宽的目标比例（与 pane 数量无关）；
+  -- 再按恢复默认分屏比例（上面的 split.ratio），两锚点固定来回切换
   toggle_ratio = 0.32,
 
   -- 切换工具（<leader>ht / :AISwitch）时关闭当前 agent，并在原 pane 重启新工具

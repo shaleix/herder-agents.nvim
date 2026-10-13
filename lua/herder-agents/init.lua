@@ -249,8 +249,9 @@ function M.toggle(tool)
   require("herder-agents.panes").toggle(config.current_tool())
 end
 
--- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：nvim pane 在
--- 记忆的基准比例与 toggle_ratio 间收窄/恢复，给相邻的 agent pane 让位
+-- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：nvim pane 占
+-- 当前 tab 全部 pane 总宽的比例在 toggle_ratio 与默认分屏比例间切换
+-- （与 tab 内 pane 数量无关）
 function M.shrink_toggle()
   require("herder-agents.panes").shrink_toggle(config.current_tool())
 end

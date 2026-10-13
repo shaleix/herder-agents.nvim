@@ -800,11 +800,12 @@ else
 end
 
 -- ---------------------------------------------------------------------------
--- 宽度 toggle（:HerdrShrinkToggle）：nvim 与左右相邻 agent pane 的分界在两个
--- 固定锚点间切换：toggle_ratio（默认 0.32）↔ 默认分屏比例 split.ratio（默认
--- 0.55）。无状态：曾按「按压时比例」记基准存 vim.g，窄态按压/连按未落定会把
--- 基准污染成窄值，「恢复」反而收窄（16%↔32% 死循环）；zoomed / 跨 tab /
--- 不相邻时守卫拦截
+-- 宽度 toggle（:HerdrShrinkToggle）：调整 nvim 占当前 tab 全部 pane 总宽的
+-- 比例，在两个固定锚点间切换：toggle_ratio（默认 0.32）↔ 默认分屏比例
+-- split.ratio（默认 0.55）。与 tab 内 pane 数量无关（agent 再 split 出新 pane
+-- 也照常工作）：收窄 = 邻侧 pane 吃进（推 nvim|邻侧 分界），恢复 = 直接扩张
+-- nvim。无状态（曾按按压时比例记基准，窄态/连按会污染成窄值死循环）；
+-- zoomed / 上下布局 / 独占 tab / 邻距异常时守卫拦截
 -- ---------------------------------------------------------------------------
 vim.env.HERDR_ENV = "1"
 local function mk_layout_fake(pane_tbl, layout_tbl, cur_tab, cur_pane_id)
@@ -849,8 +850,9 @@ local function resize_calls(argv_log)
   return calls
 end
 
--- 布局：nvim 左 130 cols + agent 右 70 cols（agent 在右，当前比例 0.65）
+-- 布局：nvim 左 130 cols + agent 右 70 cols（agent 在右，当前占比 0.65）
 -- toggle_ratio 默认 0.32：收窄后布局为 nvim 64 / agent 136（64/200 = 0.32）
+-- 语义：nvim 占当前 tab 全部 pane 总宽的比例，与 tab 内 pane 数量无关
 local st_panes = { { label = "opencode", tab_id = "t2", pane_id = "p-agent", cwd = vim.fn.getcwd() } }
 local function layout_of(nvim_w, agent_w)
   return {
@@ -862,7 +864,7 @@ local function layout_of(nvim_w, agent_w)
   }
 end
 
--- 首按：收窄 0.65 → 0.32（agent 在右 → direction left，amount = 0.33）
+-- 首按：收窄 0.65 → 0.32（邻 pane 在右 → agent 向左吃进，amount = 0.33）
 local st_exec, st_log, st_clear = mk_layout_fake(st_panes, layout_of(130, 70), "t2", "p-nvim")
 utils.set_exec(st_exec)
 panes.shrink_toggle("opencode")
@@ -872,21 +874,24 @@ check(
     and st_calls[1]["--pane"] == "p-agent"
     and st_calls[1]["--direction"] == "left"
     and st_calls[1]["--amount"] == "0.3300",
-  "宽度 toggle：首按收窄（resize 发给 agent pane，方向/比例差正确）"
+  "宽度 toggle：首按收窄（邻 pane 吃进，方向/比例差正确）"
 )
 check(vim.g.herd_shrink_state == nil, "宽度 toggle：固定锚点切换，不写 vim.g 基准")
 
--- 再按：0.32 → 默认分屏比例 0.55（direction right，amount = 0.55-0.32）
+-- 再按：0.32 → 默认分屏比例 0.55：直接向右扩张 nvim 自身（amount = 0.55-0.32）
 local st2_exec, st2_log = mk_layout_fake(st_panes, layout_of(64, 136), "t2", "p-nvim")
 utils.set_exec(st2_exec)
 panes.shrink_toggle("opencode")
 st_calls = resize_calls(st2_log)
 check(
-  #st_calls == 1 and st_calls[1]["--direction"] == "right" and st_calls[1]["--amount"] == "0.2300",
-  "宽度 toggle：再按恢复默认分屏比例 0.55（方向反转）"
+  #st_calls == 1
+    and st_calls[1]["--pane"] == "p-nvim"
+    and st_calls[1]["--direction"] == "right"
+    and st_calls[1]["--amount"] == "0.2300",
+  "宽度 toggle：再按恢复默认分屏比例 0.55（直接扩张 nvim）"
 )
 
--- agent 在左侧的镜像：nvim x=70 w=130，agent x=0 w=70 → 收窄 direction right
+-- agent 在左侧的镜像：nvim x=70 w=130，agent x=0 w=70 → 收窄 = agent 向右吃进
 local mirror_layout = {
   zoomed = false,
   panes = {
@@ -898,7 +903,33 @@ local mi_exec, mi_log = mk_layout_fake(st_panes, mirror_layout, "t2", "p-nvim")
 utils.set_exec(mi_exec)
 panes.shrink_toggle("opencode")
 local mi_calls = resize_calls(mi_log)
-check(#mi_calls == 1 and mi_calls[1]["--direction"] == "right", "宽度 toggle：agent 在左时方向镜像")
+check(
+  #mi_calls == 1
+    and mi_calls[1]["--pane"] == "p-agent"
+    and mi_calls[1]["--direction"] == "right"
+    and mi_calls[1]["--amount"] == "0.3300",
+  "宽度 toggle：邻 pane 在左时方向镜像（agent 向右吃进）"
+)
+
+-- 镜像再按：nvim x=136 w=64（32%）→ 恢复 55%：直接向左扩张 nvim 自身
+local mr_layout = {
+  zoomed = false,
+  panes = {
+    { pane_id = "p-agent", rect = { x = 0, y = 0, width = 136, height = 60 } },
+    { pane_id = "p-nvim", rect = { x = 136, y = 0, width = 64, height = 60 } },
+  },
+}
+local mr_exec, mr_log = mk_layout_fake(st_panes, mr_layout, "t2", "p-nvim")
+utils.set_exec(mr_exec)
+panes.shrink_toggle("opencode")
+local mr_calls = resize_calls(mr_log)
+check(
+  #mr_calls == 1
+    and mr_calls[1]["--pane"] == "p-nvim"
+    and mr_calls[1]["--direction"] == "left"
+    and mr_calls[1]["--amount"] == "0.2300",
+  "宽度 toggle：邻 pane 在左时再按恢复（nvim 向左扩张）"
+)
 
 -- 守卫：zoomed → 不 resize
 local zm_exec, zm_log = mk_layout_fake(st_panes, { zoomed = true, panes = layout_of(130, 70).panes }, "t2", "p-nvim")
@@ -906,14 +937,7 @@ utils.set_exec(zm_exec)
 panes.shrink_toggle("opencode")
 check(#resize_calls(zm_log) == 0, "宽度 toggle：zoomed 时拦截")
 
--- 守卫：agent 在其他 tab → 不 resize
-local xt_panes = { { label = "opencode", tab_id = "t9", pane_id = "p-agent", cwd = vim.fn.getcwd() } }
-local xt_exec, xt_log = mk_layout_fake(xt_panes, layout_of(130, 70), "t2", "p-nvim")
-utils.set_exec(xt_exec)
-panes.shrink_toggle("opencode")
-check(#resize_calls(xt_log) == 0, "宽度 toggle：agent 跨 tab 时拦截（提示先 ho）")
-
--- 守卫：上下布局（不共享竖直分界）→ 不 resize
+-- 守卫：上下布局（左右都没有紧邻 pane）→ 不 resize
 local stacked_layout = {
   zoomed = false,
   panes = {
@@ -924,7 +948,17 @@ local stacked_layout = {
 local sk_exec, sk_log = mk_layout_fake(st_panes, stacked_layout, "t2", "p-nvim")
 utils.set_exec(sk_exec)
 panes.shrink_toggle("opencode")
-check(#resize_calls(sk_log) == 0, "宽度 toggle：上下布局（不相邻）拦截")
+check(#resize_calls(sk_log) == 0, "宽度 toggle：上下布局（无左右紧邻）拦截")
+
+-- 守卫：tab 内只有 nvim 一个 pane → 无邻可推，不 resize
+local solo_layout = {
+  zoomed = false,
+  panes = { { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 244, height = 61 } } },
+}
+local solo_exec, solo_log = mk_layout_fake(st_panes, solo_layout, "t2", "p-nvim")
+utils.set_exec(solo_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(solo_log) == 0, "宽度 toggle：tab 内仅 nvim 一个 pane 时拦截")
 
 -- 真实布局回归（实测 Herdr capture）：左右相邻 pane 之间有 1 列 divider ——
 -- nvim rect={x=0,y=0,width=134,height=61}，opencode rect={x=135,y=0,width=110,
@@ -976,28 +1010,35 @@ panes.shrink_toggle("opencode")
 check(#resize_calls(q3_log) == 0 and #notify_log >= 1, "宽度 toggle：不相邻拦截仍弹提示")
 vim.notify = saved_notify
 -- 再按：布局变为 nvim 78 / agent 166（x=79，仍隔 1 列）→ 恢复默认分屏比例 0.55
+-- （直接向右扩张 nvim 自身）
 local rv_exec, rv_log = mk_layout_fake(st_panes, divider_layout(78, 166), "t2", "p-nvim")
 utils.set_exec(rv_exec)
 panes.shrink_toggle("opencode")
 local rv_calls = resize_calls(rv_log)
 check(
-  #rv_calls == 1 and rv_calls[1]["--direction"] == "right" and rv_calls[1]["--amount"] == "0.2303",
-  "宽度 toggle：1 列 divider 再按恢复默认分屏比例（方向反转）"
+  #rv_calls == 1
+    and rv_calls[1]["--pane"] == "p-nvim"
+    and rv_calls[1]["--direction"] == "right"
+    and rv_calls[1]["--amount"] == "0.2303",
+  "宽度 toggle：1 列 divider 再按恢复默认分屏比例（扩张 nvim）"
 )
 
 -- 自愈回归：窄态（16%，曾被记成基准导致 16%↔32% 死循环）按压 → 直接切到
--- 32%（实为放大），不记忆 16%；再按回到默认 55%（上例），而非 16%
+-- 32%（实为放大 nvim），不记忆 16%；再按回到默认 55%（上例），而非 16%
 local nh_exec, nh_log = mk_layout_fake(st_panes, divider_layout(39, 205), "t2", "p-nvim")
 utils.set_exec(nh_exec)
 panes.shrink_toggle("opencode")
 local nh_calls = resize_calls(nh_log)
 check(
-  #nh_calls == 1 and nh_calls[1]["--direction"] == "right" and nh_calls[1]["--amount"] == "0.1602",
+  #nh_calls == 1
+    and nh_calls[1]["--pane"] == "p-nvim"
+    and nh_calls[1]["--direction"] == "right"
+    and nh_calls[1]["--amount"] == "0.1602",
   "宽度 toggle：窄态 16% 按压自愈切到 32%（放大，不记窄基准）"
 )
 check(vim.g.herd_shrink_state == nil, "宽度 toggle：窄态按压后仍不写 vim.g 基准")
 
--- agent 在左镜像：agent x=0 w=110，nvim x=111 w=134 → 收窄 direction right
+-- agent 在左镜像：agent x=0 w=110，nvim x=111 w=134 → 收窄 = agent 向右吃进
 local ml_layout = {
   zoomed = false,
   panes = {
@@ -1010,11 +1051,34 @@ utils.set_exec(ml_exec)
 panes.shrink_toggle("opencode")
 local ml_calls = resize_calls(ml_log)
 check(
-  #ml_calls == 1 and ml_calls[1]["--direction"] == "right" and ml_calls[1]["--amount"] == "0.2292",
-  "宽度 toggle：1 列 divider 相邻（agent 左）方向镜像"
+  #ml_calls == 1
+    and ml_calls[1]["--pane"] == "p-agent"
+    and ml_calls[1]["--direction"] == "right"
+    and ml_calls[1]["--amount"] == "0.2292",
+  "宽度 toggle：1 列 divider 邻 pane 在左时方向镜像"
 )
 
--- 守卫：gap > 1（2 列无法归因于分界线）→ 不 resize
+-- 镜像 divider 再按恢复：agent x=0 w=166，nvim x=167 w=78 → nvim 向左扩张
+local ml2_layout = {
+  zoomed = false,
+  panes = {
+    { pane_id = "p-agent", rect = { x = 0, y = 0, width = 166, height = 61 } },
+    { pane_id = "p-nvim", rect = { x = 167, y = 0, width = 78, height = 61 } },
+  },
+}
+local ml2_exec, ml2_log = mk_layout_fake(st_panes, ml2_layout, "t2", "p-nvim")
+utils.set_exec(ml2_exec)
+panes.shrink_toggle("opencode")
+local ml2_calls = resize_calls(ml2_log)
+check(
+  #ml2_calls == 1
+    and ml2_calls[1]["--pane"] == "p-nvim"
+    and ml2_calls[1]["--direction"] == "left"
+    and ml2_calls[1]["--amount"] == "0.2303",
+  "宽度 toggle：1 列 divider 镜像再按恢复（nvim 向左扩张）"
+)
+
+-- 守卫：最近邻 gap > 1（≥2 列，无法归因于分界线，布局异常）→ 不 resize
 local g2_layout = divider_layout(134, 110)
 g2_layout.panes[2].rect.x = 136 -- nvim 右缘 134，agent 左缘 136
 local g2_exec, g2_log = mk_layout_fake(st_panes, g2_layout, "t2", "p-nvim")
@@ -1022,7 +1086,7 @@ utils.set_exec(g2_exec)
 panes.shrink_toggle("opencode")
 check(#resize_calls(g2_log) == 0, "宽度 toggle：gap>1（2 列）拦截不 resize")
 
--- 守卫：rect 重叠（边缘 gap 为负）→ 不 resize
+-- 守卫：rect 重叠（边缘 gap 为负，布局异常）→ 不 resize
 local ov_layout = divider_layout(134, 110)
 ov_layout.panes[2].rect.x = 100
 local ov_exec, ov_log = mk_layout_fake(st_panes, ov_layout, "t2", "p-nvim")
@@ -1030,7 +1094,10 @@ utils.set_exec(ov_exec)
 panes.shrink_toggle("opencode")
 check(#resize_calls(ov_log) == 0, "宽度 toggle：pane rect 重叠时拦截")
 
--- 守卫：中间隔着无关 pane（gap 被第三个 pane 占据）→ 不 resize 任何 pane
+-- 多 pane（中间隔无关 pane）：nvim 调的是自己占全 tab 的比例 → resize 作用于
+-- nvim 的紧邻 p-other（推动 nvim|other 分界），与更远的 agent 无关
+-- tab 内容宽 = x 区间并集 = 243，100/243≈0.4115 → 收窄：
+-- delta_cols=|0.32×243-100|=22.24，amount=22.24/(100+43)=0.1555
 local mid_layout = {
   zoomed = false,
   panes = {
@@ -1042,21 +1109,61 @@ local mid_layout = {
 local mid_exec, mid_log = mk_layout_fake(st_panes, mid_layout, "t2", "p-nvim")
 utils.set_exec(mid_exec)
 panes.shrink_toggle("opencode")
-check(#resize_calls(mid_log) == 0, "宽度 toggle：中间隔无关 pane 时不 resize（含该 pane）")
+local mid_calls = resize_calls(mid_log)
+check(
+  #mid_calls == 1
+    and mid_calls[1]["--pane"] == "p-other"
+    and mid_calls[1]["--direction"] == "left"
+    and mid_calls[1]["--amount"] == "0.1555",
+  "宽度 toggle：中间隔无关 pane 时调 nvim|紧邻 分界（tab 占比语义）"
+)
 
--- 守卫：嵌套布局（agent 与 nvim 垂直跨度仅部分重叠，非共同 split 的两个直接
--- 子节点）→ 不 resize，避免推动外层分界压到无关 pane
-local nested_layout = {
+-- 多 pane：右侧上下堆叠列（agent pane 又 split 出新 pane 的形态）——
+-- nvim 全高在左，右列两 pane 共享同一条竖直分界，推任一个都移动整列边界。
+-- 关键语义：堆叠 pane 不能重复计入分母 —— tab 内容宽 = x 区间并集 244
+-- （134+1+110），不是 Σpane 宽 354；134/244≈0.549 → 收窄 amount 同两 pane
+-- 布局：55.92/244=0.2292；邻居取 gap 最小再最靠上（p-agent）
+local col_layout = {
   zoomed = false,
   panes = {
     { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 134, height = 61 } },
     { pane_id = "p-agent", rect = { x = 135, y = 0, width = 110, height = 30 } },
+    { pane_id = "p-agent2", rect = { x = 135, y = 31, width = 110, height = 30 } },
   },
 }
-local ne_exec, ne_log = mk_layout_fake(st_panes, nested_layout, "t2", "p-nvim")
-utils.set_exec(ne_exec)
+local co_exec, co_log = mk_layout_fake(st_panes, col_layout, "t2", "p-nvim")
+utils.set_exec(co_exec)
 panes.shrink_toggle("opencode")
-check(#resize_calls(ne_log) == 0, "宽度 toggle：嵌套布局（垂直跨度不一致）拦截")
+local co_calls = resize_calls(co_log)
+check(
+  #co_calls == 1
+    and co_calls[1]["--pane"] == "p-agent"
+    and co_calls[1]["--direction"] == "left"
+    and co_calls[1]["--amount"] == "0.2292",
+  "宽度 toggle：右侧堆叠列（多 pane）收窄 nvim（推整列边界，占比分母不重复计数）"
+)
+
+-- 堆叠列再按恢复：nvim 78 / 列 166×2（内容宽 244，78/244≈0.32 已收窄）→
+-- 直接扩张 nvim：delta_cols=0.55×244-78=56.2，amount=56.2/244=0.2303
+local col2_layout = {
+  zoomed = false,
+  panes = {
+    { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 78, height = 61 } },
+    { pane_id = "p-agent", rect = { x = 79, y = 0, width = 166, height = 30 } },
+    { pane_id = "p-agent2", rect = { x = 79, y = 31, width = 166, height = 30 } },
+  },
+}
+local co2_exec, co2_log = mk_layout_fake(st_panes, col2_layout, "t2", "p-nvim")
+utils.set_exec(co2_exec)
+panes.shrink_toggle("opencode")
+local co2_calls = resize_calls(co2_log)
+check(
+  #co2_calls == 1
+    and co2_calls[1]["--pane"] == "p-nvim"
+    and co2_calls[1]["--direction"] == "right"
+    and co2_calls[1]["--amount"] == "0.2303",
+  "宽度 toggle：右侧堆叠列（多 pane）再按恢复（直接扩张 nvim，回到 55% tab 占比）"
+)
 
 -- 集成：命令已注册、默认不绑键、toggle_ratio 默认 0.35、绑定后生效
 check(vim.api.nvim_get_commands({})["HerdrShrinkToggle"] ~= nil, ":HerdrShrinkToggle 已创建")

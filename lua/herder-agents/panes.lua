@@ -251,14 +251,15 @@ end
 
 -- ---------------------------------------------------------------------------
 -- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：
--- nvim pane 与当前工具 agent pane 左右相邻时，把两者的分界在两个固定锚点间
--- 来回切：收窄锚点 toggle_ratio ↔ 默认分屏比例 split.ratio（<leader>ho split
--- 出的默认布局）。不记忆按压时的比例 —— 曾按「按压时比例」记基准存 vim.g，
--- 窄态（< toggle_ratio）按压或连按未落定时基准被污染成窄值，「恢复」反而
--- 收窄（16%↔32% 死循环）；固定锚点无状态，任何宽度一按即回锚点、自愈。
--- amount 语义为共同 split 的比例差（herdr resize --amount 实测为 0~1 比例，
--- 且服务端自带最小宽度 clamp）；比例基准 = nvim 宽 / (nvim + agent 宽)
--- （相邻即共同 split 的两个直接子节点）。
+-- 调整 nvim pane 占当前 tab 全部 pane 总宽的比例，在两个固定锚点间来回切：
+-- 收窄锚点 toggle_ratio ↔ 默认分屏比例 split.ratio（<leader>ho split 出的
+-- 默认布局）。与 tab 内 pane 数量无关 —— agent pane 再 split 出新 pane（右侧
+-- 堆叠列 / 中间隔 pane）时照常：收窄 = 邻侧 pane 吃进（推 nvim|邻侧 分界，
+-- 堆叠列任一成员都可作代理），恢复 = 直接扩张 nvim 自身。不记忆按压时的
+-- 比例 —— 曾按「按压时比例」记基准存 vim.g，窄态（< toggle_ratio）按压或
+-- 连按未落定时基准被污染成窄值，「恢复」反而收窄（16%↔32% 死循环）；
+-- 固定锚点无状态，任何宽度一按即回锚点、自愈。amount 为被调整 split 的
+-- 比例差（herdr resize --amount 实测为 0~1 比例，服务端自带最小宽度 clamp）。
 -- ---------------------------------------------------------------------------
 
 local function current_tab_layout()
@@ -275,32 +276,63 @@ local function pane_rect_in(layout, pane_id)
   return nil
 end
 
--- 左右相邻判定：共享一条竖直分界。agent 在 nvim 右侧返回 "right"，左侧返回
--- "left"；上下布局 / 嵌套不相邻返回 nil（不支持，提示手动调整，避免推错
--- 边界压到无关 pane）。
--- herdr 在左右相邻 pane 间画 1 列分界线（实测 nvim 宽 134、agent x=135、
--- area.width=245=134+1+110），rect 边缘相差 0（无分界）或 1（分界线）才算
--- 相邻；相差 ≥2 说明中间还有其他内容（无关 pane / 更宽分界），按不相邻处理。
--- 垂直跨度要求完全一致（同 y 同高）：共同 split 的两个直接子节点必然如此，
--- 收窄的比例基准（nvim/(nvim+agent)）与单条分界的 resize 才成立；仅部分
--- 重叠属嵌套布局，返回 nil
-local function adjacent_side(nvim_rect, agent_rect)
-  if not (nvim_rect and agent_rect) then
-    return nil
+-- 在 layout 中找 nvim 左/右紧邻（隔 0~1 列分界线）的 pane：垂直 band 有重叠
+-- 即可 —— 右侧为上下堆叠的多 pane 列时，列内任一成员都与 nvim 共享同一条
+-- 竖直分界，推任何一个都会移动整列边界。同侧多个候选取 gap 最小、再取最
+-- 靠上的（确定性）。返回 layout.panes 中的原始项（含 rect），无紧邻返回 nil
+local function side_neighbor(layout, nvim_pane_id, nvim_rect, side)
+  local best, best_gap, best_y = nil, nil, nil
+  for _, p in ipairs(layout.panes or {}) do
+    local r = p.rect
+    if r and p.pane_id ~= nvim_pane_id then
+      local band_overlap = r.y < nvim_rect.y + nvim_rect.height and nvim_rect.y < r.y + r.height
+      if band_overlap then
+        local gap
+        if side == "right" then
+          gap = r.x - (nvim_rect.x + nvim_rect.width)
+        else
+          gap = nvim_rect.x - (r.x + r.width)
+        end
+        if (gap == 0 or gap == 1) and (not best or gap < best_gap or (gap == best_gap and r.y < best_y)) then
+          best, best_gap, best_y = p, gap, r.y
+        end
+      end
+    end
   end
-  if not (nvim_rect.y == agent_rect.y and nvim_rect.height == agent_rect.height) then
-    return nil
+  return best
+end
+
+-- tab 内容宽 = 所有 pane 在 x 轴上覆盖区间的并集宽：上下堆叠的 pane 区间
+-- 重合自动去重（右侧堆叠列不被重复计入），pane 间的分界列不属于任何 pane
+-- 自动扣除 —— 这是「nvim 占整体 tab 宽度」的正确分母
+local function tab_content_width(layout)
+  local spans = {}
+  for _, p in ipairs(layout.panes or {}) do
+    local r = p.rect
+    if r and r.width > 0 then
+      table.insert(spans, { r.x, r.x + r.width })
+    end
   end
-  local DIVIDER_COLS = 1
-  local right_gap = agent_rect.x - (nvim_rect.x + nvim_rect.width)
-  if right_gap == 0 or right_gap == DIVIDER_COLS then
-    return "right"
+  table.sort(spans, function(a, b)
+    return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2])
+  end)
+  local total, start, finish = 0, nil, nil
+  for _, s in ipairs(spans) do
+    if not start then
+      start, finish = s[1], s[2]
+    elseif s[1] <= finish then
+      if s[2] > finish then
+        finish = s[2]
+      end
+    else
+      total = total + (finish - start)
+      start, finish = s[1], s[2]
+    end
   end
-  local left_gap = nvim_rect.x - (agent_rect.x + agent_rect.width)
-  if left_gap == 0 or left_gap == DIVIDER_COLS then
-    return "left"
+  if start then
+    total = total + (finish - start)
   end
-  return nil
+  return total
 end
 
 function M.shrink_toggle(name)
@@ -308,14 +340,9 @@ function M.shrink_toggle(name)
     utils.err(name .. " 宽度切换需要在 Herdr 中使用")
     return
   end
-  local tab_id, current_pane = current_herdr_tab_id()
+  local _, current_pane = current_herdr_tab_id()
   if not current_pane then
     utils.err("herdr pane current failed; are you inside Herdr?")
-    return
-  end
-  local agent = find_tool_pane(name)
-  if not agent or agent.tab_id ~= tab_id then
-    utils.err(name .. " pane not found; use " .. config.key_hint("toggle", "<leader>ho") .. " first")
     return
   end
   local layout = current_tab_layout()
@@ -329,42 +356,60 @@ function M.shrink_toggle(name)
   end
 
   local nvim_rect = pane_rect_in(layout, current_pane.pane_id)
-  local agent_rect = pane_rect_in(layout, agent.pane_id)
-  local side = adjacent_side(nvim_rect, agent_rect)
-  if not side then
-    utils.warn(name .. " pane 与 nvim pane 不相邻（上下/嵌套布局），请手动调整宽度")
+  if not nvim_rect then
+    utils.warn("当前 pane 不在 tab 布局中，无法调整宽度")
+    return
+  end
+  -- nvim 占当前 tab 内容宽（x 区间并集）的比例，与 pane 数量无关
+  local total = tab_content_width(layout)
+  if total <= 0 then
+    utils.warn("tab 布局没有有效 pane，无法调整宽度")
+    return
+  end
+  local right = side_neighbor(layout, current_pane.pane_id, nvim_rect, "right")
+  local left = side_neighbor(layout, current_pane.pane_id, nvim_rect, "left")
+  if not (right or left) then
+    utils.warn("nvim pane 左右没有紧邻 pane（上下布局/独占 tab），无法调整宽度")
     return
   end
 
   -- 当前 ≈ 收窄锚点 → 恢复默认分屏比例；其余（手动调宽 / 更窄的污染态 /
   -- 默认布局）一律切到收窄锚点
   local shrunk = config.options.toggle_ratio
-  local current = nvim_rect.width / (nvim_rect.width + agent_rect.width)
+  local current = nvim_rect.width / total
   local restoring = math.abs(current - shrunk) <= 0.02
   local target = restoring and config.options.split.ratio or shrunk
-
-  local delta = target - current
-  if math.abs(delta) < 0.005 then
+  if math.abs(target - current) < 0.005 then
     utils.info("已在目标宽度")
     return
   end
 
-  -- agent 在右：nvim 收窄（delta<0）= agent 左边界左移；agent 在左镜像
-  local direction
-  if side == "right" then
-    direction = delta < 0 and "left" or "right"
+  -- herdr resize 是「朝 direction 扩张该 pane」语义：收窄 nvim 只能由邻侧
+  -- pane 吃进；放大 nvim 直接扩张 nvim 自身。左右都有邻时优先右侧（agent
+  -- 常驻右侧，宽度让给/收回自 agent 列）
+  local neighbor = right or left
+  local resize_pane, direction
+  if target < current then
+    resize_pane = neighbor.pane_id
+    direction = right and "left" or "right"
   else
-    direction = delta < 0 and "right" or "left"
+    resize_pane = current_pane.pane_id
+    direction = right and "right" or "left"
   end
+  -- amount 为「nvim + 邻侧列」这一被调整 split 的比例差（herdr 实测 0~1，
+  -- 服务端自带最小宽度 clamp）：两 pane 布局时分母恰为 tab 总宽，堆叠列时
+  -- 为 nvim+列宽，均为被推 split 的内容宽
+  local delta_cols = math.abs(target * total - nvim_rect.width)
+  local amount = delta_cols / (nvim_rect.width + neighbor.rect.width)
   local res = utils.herdr_json(
     "pane",
     "resize",
     "--pane",
-    agent.pane_id,
+    resize_pane,
     "--direction",
     direction,
     "--amount",
-    string.format("%.4f", math.abs(delta))
+    string.format("%.4f", amount)
   )
   local changed = res and res.result and res.result.resize and res.result.resize.changed
   if changed == false then
