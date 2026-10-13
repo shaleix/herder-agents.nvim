@@ -800,6 +800,159 @@ else
 end
 
 -- ---------------------------------------------------------------------------
+-- 宽度 toggle（:HerdrShrinkToggle）：nvim 与左右相邻 agent pane 的分界在
+-- 「当前比例」与 toggle_ratio（默认 0.35）间切换；收窄前比例存 vim.g，
+-- 再按恢复；zoomed / 跨 tab / 不相邻时守卫拦截
+-- ---------------------------------------------------------------------------
+vim.env.HERDR_ENV = "1"
+local function mk_layout_fake(pane_tbl, layout_tbl, cur_tab, cur_pane_id)
+  local argv_log = {}
+  local exec = function(argv)
+    table.insert(argv_log, argv)
+    if argv[2] == "pane" and argv[3] == "current" then
+      return {
+        code = 0,
+        stdout = vim.json.encode({ result = { pane = { tab_id = cur_tab, pane_id = cur_pane_id } } }),
+      }
+    end
+    if argv[2] == "pane" and argv[3] == "list" then
+      return { code = 0, stdout = vim.json.encode({ result = { panes = pane_tbl } }) }
+    end
+    if argv[2] == "pane" and argv[3] == "layout" then
+      return { code = 0, stdout = vim.json.encode({ result = { layout = layout_tbl } }) }
+    end
+    if argv[2] == "pane" and argv[3] == "resize" then
+      return { code = 0, stdout = vim.json.encode({ result = { resize = { changed = true } } }) }
+    end
+    return { code = 0, stdout = "" }
+  end
+  local clear = function()
+    for i = #argv_log, 1, -1 do
+      argv_log[i] = nil
+    end
+  end
+  return exec, argv_log, clear
+end
+local function resize_calls(argv_log)
+  local calls = {}
+  for _, argv in ipairs(argv_log) do
+    if argv[2] == "pane" and argv[3] == "resize" then
+      local opts = {}
+      for i = 4, #argv, 2 do
+        opts[argv[i]] = argv[i + 1]
+      end
+      table.insert(calls, opts)
+    end
+  end
+  return calls
+end
+
+-- 布局：nvim 左 130 cols + agent 右 70 cols（agent 在右，当前比例 0.65）
+-- toggle_ratio 默认 0.32：收窄后布局为 nvim 64 / agent 136（64/200 = 0.32）
+local st_panes = { { label = "opencode", tab_id = "t2", pane_id = "p-agent", cwd = vim.fn.getcwd() } }
+local function layout_of(nvim_w, agent_w)
+  return {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-nvim", rect = { x = 0, y = 0, width = nvim_w, height = 60 } },
+      { pane_id = "p-agent", rect = { x = nvim_w, y = 0, width = agent_w, height = 60 } },
+    },
+  }
+end
+
+-- 首按：收窄 0.65 → 0.32（agent 在右 → direction left，amount = 0.33）
+local st_exec, st_log, st_clear = mk_layout_fake(st_panes, layout_of(130, 70), "t2", "p-nvim")
+utils.set_exec(st_exec)
+vim.g.herd_shrink_state = nil
+panes.shrink_toggle("opencode")
+local st_calls = resize_calls(st_log)
+check(
+  #st_calls == 1
+    and st_calls[1]["--pane"] == "p-agent"
+    and st_calls[1]["--direction"] == "left"
+    and st_calls[1]["--amount"] == "0.3300",
+  "宽度 toggle：首按收窄（resize 发给 agent pane，方向/比例差正确）"
+)
+check(
+  type(vim.g.herd_shrink_state) == "table"
+    and vim.g.herd_shrink_state.pane == "p-nvim"
+    and math.abs(vim.g.herd_shrink_state.baseline - 0.65) < 0.001,
+  "宽度 toggle：收窄前基准 0.65 已存 vim.g"
+)
+
+-- 再按：恢复 0.32 → 0.65（direction right），成功后清 state
+local st2_exec, st2_log = mk_layout_fake(st_panes, layout_of(64, 136), "t2", "p-nvim")
+utils.set_exec(st2_exec)
+panes.shrink_toggle("opencode")
+st_calls = resize_calls(st2_log)
+check(
+  #st_calls == 1 and st_calls[1]["--direction"] == "right" and st_calls[1]["--amount"] == "0.3300",
+  "宽度 toggle：再按恢复（方向反转、回到基准比例）"
+)
+check(vim.g.herd_shrink_state == nil, "宽度 toggle：恢复后清除基准状态")
+
+-- agent 在左侧的镜像：nvim x=70 w=130，agent x=0 w=70 → 收窄 direction right
+local mirror_layout = {
+  zoomed = false,
+  panes = {
+    { pane_id = "p-nvim", rect = { x = 70, y = 0, width = 130, height = 60 } },
+    { pane_id = "p-agent", rect = { x = 0, y = 0, width = 70, height = 60 } },
+  },
+}
+vim.g.herd_shrink_state = nil
+local mi_exec, mi_log = mk_layout_fake(st_panes, mirror_layout, "t2", "p-nvim")
+utils.set_exec(mi_exec)
+panes.shrink_toggle("opencode")
+local mi_calls = resize_calls(mi_log)
+check(#mi_calls == 1 and mi_calls[1]["--direction"] == "right", "宽度 toggle：agent 在左时方向镜像")
+
+-- 守卫：zoomed → 不 resize
+vim.g.herd_shrink_state = nil
+local zm_exec, zm_log = mk_layout_fake(st_panes, { zoomed = true, panes = layout_of(130, 70).panes }, "t2", "p-nvim")
+utils.set_exec(zm_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(zm_log) == 0, "宽度 toggle：zoomed 时拦截")
+
+-- 守卫：agent 在其他 tab → 不 resize
+local xt_panes = { { label = "opencode", tab_id = "t9", pane_id = "p-agent", cwd = vim.fn.getcwd() } }
+local xt_exec, xt_log = mk_layout_fake(xt_panes, layout_of(130, 70), "t2", "p-nvim")
+utils.set_exec(xt_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(xt_log) == 0, "宽度 toggle：agent 跨 tab 时拦截（提示先 ho）")
+
+-- 守卫：上下布局（不共享竖直分界）→ 不 resize
+local stacked_layout = {
+  zoomed = false,
+  panes = {
+    { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 200, height = 30 } },
+    { pane_id = "p-agent", rect = { x = 0, y = 30, width = 200, height = 30 } },
+  },
+}
+local sk_exec, sk_log = mk_layout_fake(st_panes, stacked_layout, "t2", "p-nvim")
+utils.set_exec(sk_exec)
+panes.shrink_toggle("opencode")
+check(#resize_calls(sk_log) == 0, "宽度 toggle：上下布局（不相邻）拦截")
+
+-- 集成：命令已注册、默认不绑键、toggle_ratio 默认 0.35、绑定后生效
+check(vim.api.nvim_get_commands({})["HerdrShrinkToggle"] ~= nil, ":HerdrShrinkToggle 已创建")
+check(not has_map(" h<", "n"), "默认不绑定 <leader>h<")
+check(math.abs(require("herder-agents.config").options.toggle_ratio - 0.32) < 1e-9, "toggle_ratio 默认 0.32")
+plugin.setup({
+  tools = { mycli = { title = " My CLI Chat " } },
+  keys = { shrink_toggle = "<leader>h<" },
+})
+check(has_map(" h<", "n"), "传入 shrink_toggle 键后注册 <leader>h<")
+
+vim.g.herd_shrink_state = nil
+utils.set_exec(nil)
+utils.set_exec_async(nil)
+if saved_env then
+  vim.env.HERDR_ENV = saved_env
+else
+  vim.env.HERDR_ENV = nil
+end
+
+-- ---------------------------------------------------------------------------
 -- 终端模式复位（utils.reset_pane_terminal）：agent 退出后遗留 kitty keyboard /
 -- SGR 鼠标上报等终端模式，输入行被编码后的按键/鼠标事件持续污染
 -- （"5:1u9;5:1uopencode" → command not found）。复位序列只能由 pane 内 shell

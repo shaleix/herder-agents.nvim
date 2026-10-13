@@ -249,6 +249,138 @@ function M.toggle(name)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：
+-- nvim pane 与当前工具 agent pane 左右相邻时，把两者的分界在「当前比例」与
+-- toggle_ratio 间来回切。amount 语义为共同 split 的比例差（herdr resize
+-- --amount 实测为 0~1 比例，且服务端自带最小宽度 clamp）；比例基准 =
+-- nvim 宽 / (nvim + agent 宽)（相邻即共同 split 的两个直接子节点）。
+-- 收窄前的基准比例存 vim.g（按 nvim pane id 绑定）；nvim 重启后遗忘，
+-- 首按把当前比例记为基准再收窄。
+-- ---------------------------------------------------------------------------
+local SHRINK_STATE = "herd_shrink_state"
+
+local function current_tab_layout()
+  local res = utils.herdr_json("pane", "layout", "--current")
+  return res and res.result and res.result.layout
+end
+
+local function pane_rect_in(layout, pane_id)
+  for _, p in ipairs(layout.panes or {}) do
+    if p.pane_id == pane_id then
+      return p.rect
+    end
+  end
+  return nil
+end
+
+-- 左右相邻判定：共享一条竖直分界。agent 在 nvim 右侧返回 "right"，左侧返回
+-- "left"；上下布局 / 嵌套不相邻返回 nil（不支持，提示手动调整，避免推错
+-- 边界压到无关 pane）
+local function adjacent_side(nvim_rect, agent_rect)
+  if not (nvim_rect and agent_rect) then
+    return nil
+  end
+  local same_band = nvim_rect.y < agent_rect.y + agent_rect.height and agent_rect.y < nvim_rect.y + nvim_rect.height
+  if not same_band then
+    return nil
+  end
+  if nvim_rect.x + nvim_rect.width == agent_rect.x then
+    return "right"
+  end
+  if agent_rect.x + agent_rect.width == nvim_rect.x then
+    return "left"
+  end
+  return nil
+end
+
+function M.shrink_toggle(name)
+  if vim.env.HERDR_ENV ~= "1" then
+    utils.err(name .. " 宽度切换需要在 Herdr 中使用")
+    return
+  end
+  local tab_id, current_pane = current_herdr_tab_id()
+  if not current_pane then
+    utils.err("herdr pane current failed; are you inside Herdr?")
+    return
+  end
+  local agent = find_tool_pane(name)
+  if not agent or agent.tab_id ~= tab_id then
+    utils.err(name .. " pane not found; use " .. config.key_hint("toggle", "<leader>ho") .. " first")
+    return
+  end
+  local layout = current_tab_layout()
+  if not layout then
+    utils.err("herdr pane layout failed")
+    return
+  end
+  if layout.zoomed then
+    utils.warn("当前 pane 处于 zoom 全屏，先退出 zoom 再切换宽度")
+    return
+  end
+
+  local nvim_rect = pane_rect_in(layout, current_pane.pane_id)
+  local agent_rect = pane_rect_in(layout, agent.pane_id)
+  local side = adjacent_side(nvim_rect, agent_rect)
+  if not side then
+    utils.warn(name .. " pane 与 nvim pane 不相邻（上下/嵌套布局），请手动调整宽度")
+    return
+  end
+
+  local target = config.options.toggle_ratio
+  local current = nvim_rect.width / (nvim_rect.width + agent_rect.width)
+  local state = vim.g[SHRINK_STATE]
+  -- 已收窄（当前 ≈ toggle_ratio 且有基准）→ 恢复；否则记基准并收窄。
+  -- 手动改过宽度（两者皆不匹配）按收窄处理，基准更新为手调值
+  local restoring = type(state) == "table"
+    and state.pane == current_pane.pane_id
+    and type(state.baseline) == "number"
+    and math.abs(current - target) <= 0.02
+  if restoring then
+    target = state.baseline
+  else
+    vim.g[SHRINK_STATE] = { pane = current_pane.pane_id, baseline = current }
+  end
+
+  local delta = target - current
+  if math.abs(delta) < 0.005 then
+    if restoring then
+      vim.g[SHRINK_STATE] = nil
+    end
+    utils.info("已在目标宽度")
+    return
+  end
+
+  -- agent 在右：nvim 收窄（delta<0）= agent 左边界左移；agent 在左镜像
+  local direction
+  if side == "right" then
+    direction = delta < 0 and "left" or "right"
+  else
+    direction = delta < 0 and "right" or "left"
+  end
+  local res = utils.herdr_json(
+    "pane",
+    "resize",
+    "--pane",
+    agent.pane_id,
+    "--direction",
+    direction,
+    "--amount",
+    string.format("%.4f", math.abs(delta))
+  )
+  local changed = res and res.result and res.result.resize and res.result.resize.changed
+  if changed == false then
+    utils.info("宽度已到边界，未变化")
+    return
+  end
+  if restoring then
+    vim.g[SHRINK_STATE] = nil
+    utils.info(string.format("nvim pane 宽度已恢复（%d%%）", math.floor(target * 100 + 0.5)))
+  else
+    utils.info(string.format("nvim pane 已收窄到 %d%%", math.floor(target * 100 + 0.5)))
+  end
+end
+
 function M.interrupt(name)
   local tool = config.options.tools[name]
   if tool then

@@ -102,6 +102,15 @@ setup_commands = function()
       desc = "Drop queued AI prompts",
     })
   end
+
+  -- 宽度 toggle：nvim pane 收窄到 toggle_ratio / 恢复记忆的基准宽度
+  if cmds.shrink_toggle then
+    vim.api.nvim_create_user_command(cmds.shrink_toggle, function()
+      M.shrink_toggle()
+    end, {
+      desc = "Toggle nvim pane width (shrink to toggle_ratio / restore)",
+    })
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -134,6 +143,10 @@ setup_keymaps = function()
   map("toggle", { "n" }, function()
     M.toggle()
   end, "Toggle AI")
+
+  map("shrink_toggle", { "n" }, function()
+    M.shrink_toggle()
+  end, "AI width toggle (shrink nvim pane)")
 
   -- input：n 与 x 的 rhs 不同（x 预填选区上下文），按 mode 拆开注册
   do
@@ -234,6 +247,12 @@ function M.toggle(tool)
     return
   end
   require("herder-agents.panes").toggle(config.current_tool())
+end
+
+-- 宽度 toggle（:HerdrShrinkToggle / keys.shrink_toggle）：nvim pane 在
+-- 记忆的基准比例与 toggle_ratio 间收窄/恢复，给相邻的 agent pane 让位
+function M.shrink_toggle()
+  require("herder-agents.panes").shrink_toggle(config.current_tool())
 end
 
 ---@param content string|nil 预填草稿的内容（如选区上下文）
