@@ -50,7 +50,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | Binding | Action |
 | --- | --- |
 | `<leader>ho` | open/close the tool's herdr pane (toggles zoom when open) |
-| `<leader>h<` | width toggle: switch nvim's share of the current tab's total pane width between `toggle_ratio` (default 32%, nvim shrunk) and the default split ratio `split.ratio` (default 55%), regardless of how many panes the tab has (a stacked agent column or panes in between are fine — the nvim boundary is what moves); stateless — currently ≈ `toggle_ratio` restores the default ratio, anything else snaps back to `toggle_ratio`; zoomed, vertical-only layouts, or a lone nvim pane are refused with a hint — herdr clamps the minimum width |
+| `<leader>h<` | width toggle: switch nvim's share of its owning split's content width (the whole tab width in the standard layout) between `toggle_ratio` (default 32%, nvim shrunk) and the default split ratio `split.ratio` (default 55%), regardless of how many panes the tab has (a stacked agent column or panes in between are fine — the nvim boundary is what moves); stateless — currently ≈ `toggle_ratio` restores the default ratio, anything else snaps back to `toggle_ratio`; zoomed, vertical-only layouts, or a lone nvim pane are refused with a hint — herdr clamps the minimum width |
 | `<leader>he` | prompt popup (visual mode prefills the selection as context) |
 | `<leader>hx` | interrupt |
 | `<leader>hc` | new session |
