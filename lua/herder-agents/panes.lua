@@ -307,13 +307,18 @@ end
 
 -- 在 layout.splits 中定位 nvim 横向归属的 split S 及其相对边界的位置：只看
 -- direction=="right" 的 split，nvim 横向落在 s.rect 内（容差 0.5 列），且与
--- S 的 ratio 边界（rect.x + ratio*rect.width）重合（容差 ≤1 列分界线）——
--- nvim 是该边界的左孩子（side="left"，split.ratio 即 nvim 侧占比）或右孩子
--- （side="right"，占比 = 1−ratio）。herdr resize --amount 的真实语义就是该
--- split 的 ratio 增量（活体标定），与被推 pane 自身宽度无关；ratio 为 float
--- （实测出现 0.65000004），一切坐标比较带容差。多个匹配取 rect 面积最小者
--- （最内层，即嵌套布局下 nvim 直接控制的那条边界）；无匹配返回 nil
--- （上下布局 / 独占 tab）
+-- S 的 ratio 边界（rect.x + ratio*rect.width）重合——nvim 是该边界的左孩子
+-- （side="left"，split.ratio 即 nvim 侧占比）或右孩子（side="right"，占比 =
+-- 1−ratio）。herdr resize --amount 的真实语义就是该 split 的 ratio 增量
+-- （活体标定），与被推 pane 自身宽度无关；ratio 为 float（实测出现
+-- 0.65000004），一切坐标比较带容差。边界重合判定按 herdr 的整数落位语义
+-- （40 个真实 tab 布局标定）：边界列 = round(rect.x+ratio*rect.width)，右孩子
+-- 从该列起，左孩子右缘 = 该列−1（1 列 divider）——因此边界连续坐标相对左
+-- 孩子右缘落在 [edge−0.5, edge+1.5)、相对右孩子 x 落在 [x−1.5, x+0.5)。
+-- 窗口宽度仍为 2 列（与旧 |diff|≤1 相同，不会更易误选 split），只是中心从
+-- pane 边缘修正到 divider 实际所在处；下界兼容 0 间距布局。多个匹配取 rect
+-- 面积最小者（最内层，即嵌套布局下 nvim 直接控制的那条边界）；无匹配返回
+-- nil（上下布局 / 独占 tab）
 local function owning_h_split(layout, nvim_rect)
   local best, best_side, best_area
   for _, s in ipairs(layout.splits or {}) do
@@ -322,10 +327,11 @@ local function owning_h_split(layout, nvim_rect)
       local inside = nvim_rect.x >= r.x - 0.5 and nvim_rect.x + nvim_rect.width <= r.x + r.width + 0.5
       if inside then
         local boundary_x = r.x + (s.ratio or 0) * r.width
+        local right_edge = nvim_rect.x + nvim_rect.width
         local side
-        if math.abs(nvim_rect.x + nvim_rect.width - boundary_x) <= 1 then
+        if boundary_x >= right_edge - 0.5 and boundary_x < right_edge + 1.5 then
           side = "left"
-        elseif math.abs(nvim_rect.x - boundary_x) <= 1 then
+        elseif boundary_x >= nvim_rect.x - 1.5 and boundary_x < nvim_rect.x + 0.5 then
           side = "right"
         end
         if side then

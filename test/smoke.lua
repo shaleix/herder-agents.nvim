@@ -171,7 +171,11 @@ check(context.notes_block(notes.checked()) == nil, "notes_block 空列表返回 
 vim.api.nvim_win_set_cursor(0, { 3, 0 })
 local range = context.note_range()
 check(range ~= nil and range.start_line == 3 and range.end_line == 3, "note_range 普通模式取光标单行")
-check(range.path == "/tmp/herder-agents-notes.lua", "note_range 返回缓冲区路径")
+-- macOS 上 nvim 会把 /tmp 解析成 /private/tmp（symlink），比较前先 resolve
+check(
+  vim.fn.resolve(range.path) == vim.fn.resolve("/tmp/herder-agents-notes.lua"),
+  "note_range 返回缓冲区路径"
+)
 -- api.add_note 编程入口
 local n3 = plugin.api.add_note("/tmp/herder-agents-notes.lua", 1, 1, "via api")
 check(n3 ~= nil and #notes.list() == 1, "api.add_note 存入备注")
@@ -1111,6 +1115,138 @@ check(
   "宽度 toggle：1 列 divider 镜像再按恢复（nvim 向左扩张）"
 )
 
+do -- 真实布局回归块（局部变量隔离，避免超出 200 局部上限）
+  -- 真实布局回归（herdr 0.9.3 用户现场 capture，tab w6C:t1）：root ratio
+  -- 0.32 × 宽 245 → 边界 78.4；herdr 取整落位（40 个真实 tab 布局标定）：
+  -- 边界列 = round(rect.x+ratio*rect.width)，右孩子从该列起，左孩子右缘 =
+  -- 该列−1（1 列 divider）→ nvim 右缘 77、右邻起 78。旧判定
+  -- |nvim右缘−boundary|≤1 会算 |77−78.4|=1.4 把真实横向 split 排除，
+  -- 误报「上下布局/独占 tab」
+  local real_layout = {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 77, height = 61 } },
+      { pane_id = "p-agent", rect = { x = 78, y = 0, width = 167, height = 61 } },
+    },
+    splits = {
+      { id = "split_0_root", direction = "right", ratio = 0.32, rect = { x = 0, y = 0, width = 245, height = 61 } },
+    },
+  }
+  local rl_exec, rl_log = mk_layout_fake(st_panes, real_layout, "t2", "p-nvim")
+  utils.set_exec(rl_exec)
+  panes.shrink_toggle("opencode")
+  st_calls = resize_calls(rl_log)
+  check(
+    #st_calls == 1
+      and st_calls[1]["--pane"] == "p-nvim"
+      and st_calls[1]["--direction"] == "right"
+      and st_calls[1]["--amount"] == "0.2300",
+    "宽度 toggle：真实布局（边界 78.4，nvim 右缘 77）识别横向 split 并恢复 0.55"
+  )
+
+  -- 同 tab 后续形态（右侧 pane 再 split 出第二个 pane）：root 边界不变
+  -- （78.4），nvim 归属仍是 root split；嵌套 split_1_1（边界 161.5）不参与
+  -- nvim 的归属判定
+  local grown_layout = {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 77, height = 61 } },
+      { pane_id = "p-agent", rect = { x = 78, y = 0, width = 83, height = 61 } },
+      { pane_id = "p-agent2", rect = { x = 162, y = 0, width = 83, height = 61 } },
+    },
+    splits = {
+      { id = "split_0_root", direction = "right", ratio = 0.32, rect = { x = 0, y = 0, width = 245, height = 61 } },
+      { id = "split_1_1", direction = "right", ratio = 0.5, rect = { x = 78, y = 0, width = 167, height = 61 } },
+    },
+  }
+  local gr_exec, gr_log = mk_layout_fake(st_panes, grown_layout, "t2", "p-nvim")
+  utils.set_exec(gr_exec)
+  panes.shrink_toggle("opencode")
+  st_calls = resize_calls(gr_log)
+  check(
+    #st_calls == 1
+      and st_calls[1]["--pane"] == "p-nvim"
+      and st_calls[1]["--direction"] == "right"
+      and st_calls[1]["--amount"] == "0.2300",
+    "宽度 toggle：右侧再 split 出新 pane 后仍调 root 边界（嵌套 split 不参与）"
+  )
+
+  -- 真实取整语义（默认比例 0.55）：边界 134.75 → round 135，nvim 右缘 134、
+  -- agent 起 135。首按收窄：推 agent 向左吃进，amount = 0.55−0.32
+  local rs_layout = {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-nvim", rect = { x = 0, y = 0, width = 134, height = 61 } },
+      { pane_id = "p-agent", rect = { x = 135, y = 0, width = 110, height = 61 } },
+    },
+    splits = {
+      { id = "split_0_root", direction = "right", ratio = 0.55, rect = { x = 0, y = 0, width = 245, height = 61 } },
+    },
+  }
+  local rs_exec, rs_log = mk_layout_fake(st_panes, rs_layout, "t2", "p-nvim")
+  utils.set_exec(rs_exec)
+  panes.shrink_toggle("opencode")
+  st_calls = resize_calls(rs_log)
+  check(
+    #st_calls == 1
+      and st_calls[1]["--pane"] == "p-agent"
+      and st_calls[1]["--direction"] == "left"
+      and st_calls[1]["--amount"] == "0.2300",
+    "宽度 toggle：真实取整语义（边界 134.75）首按收窄（agent 吃进）"
+  )
+
+  -- 真实取整语义镜像（nvim 是右孩子）：边界 78.4 → round 78 = nvim x，左邻
+  -- 右缘 77。share = 1−0.32 = 0.68 → 收窄到 0.32：推左邻向右，amount = 0.36
+  local rm_layout = {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-agent", rect = { x = 0, y = 0, width = 77, height = 61 } },
+      { pane_id = "p-nvim", rect = { x = 78, y = 0, width = 167, height = 61 } },
+    },
+    splits = {
+      { id = "split_0_root", direction = "right", ratio = 0.32, rect = { x = 0, y = 0, width = 245, height = 61 } },
+    },
+  }
+  local rm_exec, rm_log = mk_layout_fake(st_panes, rm_layout, "t2", "p-nvim")
+  utils.set_exec(rm_exec)
+  panes.shrink_toggle("opencode")
+  st_calls = resize_calls(rm_log)
+  check(
+    #st_calls == 1
+      and st_calls[1]["--pane"] == "p-agent"
+      and st_calls[1]["--direction"] == "right"
+      and st_calls[1]["--amount"] == "0.3600",
+    "宽度 toggle：真实取整语义镜像（nvim 右孩子，边界 78.4 = nvim x）收窄"
+  )
+
+  -- 真实取整语义嵌套：root 边界 98（p-left 右缘 97），嵌套 split_1 边界
+  -- 171.5 → round 172 = nvim x（p-mid 右缘 171）。nvim 只匹配 split_1（root
+  -- 边界 98 离 nvim 很远），share = 1−0.5 = 0.5 → 收窄：推 p-mid 向右，
+  -- amount = 0.68−0.5 = 0.18
+  local rn_layout = {
+    zoomed = false,
+    panes = {
+      { pane_id = "p-left", rect = { x = 0, y = 0, width = 97, height = 61 } },
+      { pane_id = "p-mid", rect = { x = 98, y = 0, width = 73, height = 61 } },
+      { pane_id = "p-nvim", rect = { x = 172, y = 0, width = 73, height = 61 } },
+    },
+    splits = {
+      { id = "split_0_root", direction = "right", ratio = 0.4, rect = { x = 0, y = 0, width = 245, height = 61 } },
+      { id = "split_1", direction = "right", ratio = 0.5, rect = { x = 98, y = 0, width = 147, height = 61 } },
+    },
+  }
+  local rn_exec, rn_log = mk_layout_fake(st_panes, rn_layout, "t2", "p-nvim")
+  utils.set_exec(rn_exec)
+  panes.shrink_toggle("opencode")
+  st_calls = resize_calls(rn_log)
+  check(
+    #st_calls == 1
+      and st_calls[1]["--pane"] == "p-mid"
+      and st_calls[1]["--direction"] == "right"
+      and st_calls[1]["--amount"] == "0.1800",
+    "宽度 toggle：真实取整语义嵌套（取内层 split_1 边界，非 root）"
+  )
+end
 -- 守卫：最近邻 gap > 1（≥2 列，无法归因于分界线，布局异常）→ 不 resize
 local g2_layout = divider_layout(134, 110)
 g2_layout.panes[2].rect.x = 136 -- nvim 右缘 134，agent 左缘 136
