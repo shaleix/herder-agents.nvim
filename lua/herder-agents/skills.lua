@@ -6,9 +6,12 @@
 --             兼容 {name, location} 形状）；配置了 api 时优先
 --   fs  模式  skills.user / skills.project（+ project_up）→ 递归发现
 --             <目录>/SKILL.md，frontmatter 的 name/description 可覆盖目录名
+-- api 与 fs 字段可共存：api 拉取失败（进程出错/非零退出/大响应经管道被截断
+-- 导致 JSON 不完整/缺 data）时自动回退 fs 目录扫描，并每会话每工具告警一次。
 -- 未配置 skills 的工具没有 skill 列表（list 直接回 {}）。
 --
--- 缓存按 工具 + cwd（fs 模式）分键，ttl 取 config.options.completion.skill_ttl：
+-- 缓存按 工具 + cwd（含任一 fs 字段的配置）分键，ttl 取
+-- config.options.completion.skill_ttl：
 --   - 缓存新鲜：同步回调缓存
 --   - 缓存过期：先回调旧列表，同时后台刷新
 --   - 无缓存：回调挂起，首拉完成后统一 flush（pending/in_flight 模式，每键一份）
@@ -201,7 +204,7 @@ end
 -- ---------------------------------------------------------------------------
 
 -- 执行 skills.api 的 argv，解析响应 {data:[...]}（兼容 {name, location} 形状）。
--- 失败（非零退出/非 JSON/缺 data）回调 nil → 保留旧列表或落 {}
+-- 失败（非零退出/非 JSON/缺 data）回调 nil，由调用方决定回退（fs 扫描/旧列表/{}）
 local function api_fetch(spec, on_done)
   local argv = spec.api
   if type(argv) ~= "table" or #argv == 0 then
@@ -237,13 +240,31 @@ end
 -- 缓存与公开 API
 -- ---------------------------------------------------------------------------
 
--- 缓存键：工具 + \0 + （fs 模式追加 cwd；api 模式为空 —— 与 cwd 无关）
+-- 缓存键：工具 + \0 + （spec 含任一 fs 字段则追加 cwd —— 目录扫描结果与 cwd
+-- 相关；纯 api 模式为空 —— 与 cwd 无关）
 local function cache_key(tool, spec)
   local suffix = ""
-  if not spec.api then
+  if spec.user or spec.project then
     suffix = vim.fn.getcwd()
   end
   return tool .. "\0" .. suffix
+end
+
+-- api 拉取失败的一次性告警（每会话每工具至多一次；成功/合法空列表不告警）。
+-- 说明可能原因（CLI 大响应经管道输出被截断 → 退出码 0 但 JSON 不完整）与
+-- 回退后果（有 fs 目录 → 目录扫描；没有 → 空列表）
+local warned = {}
+local function warn_api_failure(tool, has_fs)
+  if warned[tool] then
+    return
+  end
+  warned[tool] = true
+  utils.warn(
+    ("skill 列表获取失败（%s api 输出被截断或非法 JSON），已回退%s"):format(
+      tool,
+      has_fs and "目录扫描（仅用户/项目级 skill）" or "空列表"
+    )
+  )
 end
 
 --- list(tool, on_done)：回调规范化条目 { {id, name, description, path}, ... }。
@@ -299,7 +320,19 @@ function M.list(tool, on_done)
       c.pending = {}
     end
     if spec.api then
-      api_fetch(spec, finish)
+      local has_fs = spec.user ~= nil or spec.project ~= nil
+      api_fetch(spec, function(entries)
+        if entries == nil then
+          -- api 失败（exec 出错/非零退出/非法 JSON/缺 data）：告警一次；
+          -- 配了 fs 目录时回退目录扫描（fs 也失败则维持旧列表/{}）
+          warn_api_failure(tool, has_fs)
+          if has_fs then
+            local ok, fs_entries = pcall(fs_list, spec, vim.fn.getcwd())
+            entries = ok and fs_entries or nil
+          end
+        end
+        finish(entries)
+      end)
     else
       -- fs 扫描小且同步，直接出结果（整体 pcall，出错降级为失败刷新）
       local ok, entries = pcall(fs_list, spec, vim.fn.getcwd())
@@ -322,9 +355,10 @@ function M.warm()
   M.list(tool, function() end)
 end
 
---- 测试注入：清空全部缓存（与 delivery._reset 同款约定）
+--- 测试注入：清空全部缓存与一次性告警状态（与 delivery._reset 同款约定）
 function M._reset()
   cache = {}
+  warned = {}
 end
 
 return M

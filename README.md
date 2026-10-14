@@ -266,7 +266,7 @@ The skill list is acquired per current tool from `tools.<name>.skills`
 
 | tool | mode | source | trigger | label |
 | --- | --- | --- | --- | --- |
-| opencode | api | `opencode api skill.list` | `@` | `id` |
+| opencode | api + fs fallback | `opencode api skill.list` (includes built-in/plugin skills); when it fails — the CLI intermittently truncates huge piped responses (exit code 0 but invalid JSON) — falls back to user `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` + project `.opencode/skills`, `.claude/skills`, `.agents/skills` up to the git root | `@` | `id` |
 | qodercli | fs | user `~/.agents/skills` + project `.qoder/skills` (cwd) | `/` | `id` |
 | pi | fs | user `~/.pi/agent/skills`, `~/.agents/skills` + project `.pi/skills`, `.agents/skills` walked up to the git root | `/` | `skill:<id>` |
 
@@ -278,6 +278,11 @@ Two acquisition modes:
   containing `SKILL.md` is one skill (frontmatter `name:`/`description:`
   override the directory name, `id` falls back to it). With `project_up`,
   project dirs are resolved from the cwd up to the git root.
+
+`api` and the fs dirs can coexist: when the api call fails (exec error, non-zero
+exit, or invalid JSON — e.g. the pipe-truncated large responses above), the fs
+scan runs instead and a warning is shown once per session per tool. Large but
+valid payloads parse fine.
 
 Precedence is first-discovered-wins — user dirs first, then project roots from
 the topmost ancestor down to the cwd (so user > ancestor > cwd, and duplicate

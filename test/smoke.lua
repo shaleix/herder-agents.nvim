@@ -1860,7 +1860,8 @@ local function run_skill_tests()
   write_skill(plain .. "/.pi/skills/plain", nil)
 
   -- 注册测试工具：myfs（带用户目录，user dup 胜出）/ myfs2（无用户目录，
-  -- 祖先 dup 胜出）/ myapi1+myapi2（api 模式的两种响应形状）
+  -- 祖先 dup 胜出）/ myapi1+myapi2（api 模式的两种响应形状）/
+  -- myapi3（api+fs 共存：截断回退）/ myapi4（合法大响应）
   local saved_cwd = vim.fn.getcwd()
   local saved_tool = vim.g.ai_tool
   plugin.setup({
@@ -1877,6 +1878,15 @@ local function run_skill_tests()
       myfs2 = { skills = { project = { ".pi/skills", ".agents/skills" }, project_up = true, trigger = "/" } },
       myapi1 = { skills = { api = { "fake-skill-cli-1", "list" } } },
       myapi2 = { skills = { api = { "fake-skill-cli-2", "list" } } },
+      myapi3 = {
+        skills = {
+          api = { "fake-skill-cli-3", "list" },
+          user = { user_dir },
+          project = { ".pi/skills" },
+          project_up = true,
+        },
+      },
+      myapi4 = { skills = { api = { "fake-skill-cli-4", "list" } } },
     },
   })
   skills._reset()
@@ -1958,6 +1968,13 @@ local function run_skill_tests()
   -- api 模式：两种响应形状归一化 + 缓存（新鲜期内第二次 list 不再 exec）
   vim.cmd("cd " .. saved_cwd)
   local api_calls = {}
+  local cli3_calls = 0
+  -- 截断响应 fixture：合法 JSON（含 70KB description）在 64KiB 处切断
+  local truncated_json = vim.json
+    .encode({
+      data = { { id = "huge", name = "Huge", description = string.rep("x", 70000), path = "/p/huge" } },
+    })
+    :sub(1, 65536)
   utils.set_exec_async(function(argv, on_done)
     table.insert(api_calls, argv[1])
     if argv[1] == "fake-skill-cli-1" then
@@ -1972,6 +1989,18 @@ local function run_skill_tests()
       on_done({
         code = 0,
         stdout = vim.json.encode({ data = { { name = "beta", location = "/p/beta", description = "loc desc" } } }),
+        stderr = "",
+      })
+    elseif argv[1] == "fake-skill-cli-3" then
+      -- 复现现场 bug：CLI 经管道偶发截断大响应（退出码仍 0，JSON 被切在
+      -- 字符串字面量中间 → 不完整），64KiB 边界与报告一致
+      cli3_calls = cli3_calls + 1
+      on_done({ code = 0, stdout = truncated_json, stderr = "" })
+    elseif argv[1] == "fake-skill-cli-4" then
+      -- 合法大响应（~220KB）：证明大体积本身不是失败原因
+      on_done({
+        code = 0,
+        stdout = vim.json.encode({ data = { { id = "big", description = string.rep("y", 220000), path = "/p/big" } } }),
         stderr = "",
       })
     else
@@ -2009,6 +2038,49 @@ local function run_skill_tests()
     none = entries
   end)
   check(none ~= nil and #none == 0, "未配置 skills 的工具：list 回 {}（无 skill 补全）")
+
+  -- api + fs 共存（myapi3）：截断响应（退出码 0、JSON 不完整）→ 自动回退目录
+  -- 扫描 + 每会话每工具告警一次；回退结果进缓存，期内第二次 list 不再 exec/告警。
+  -- myapi4：合法大响应（~220KB）照常从 api 解析（大体积 ≠ 失败）
+  local saved_warn = utils.warn
+  local warn_log = {}
+  utils.warn = function(msg)
+    table.insert(warn_log, tostring(msg))
+  end
+  vim.cmd("cd " .. sub)
+  skills._reset()
+  local api3
+  skills.list("myapi3", function(entries)
+    api3 = entries
+  end)
+  local api3_ids = ids_of(api3)
+  check(
+    api3_ids.alpha and api3_ids.bare and api3_ids.dup and api3_ids.deep,
+    "api 失败回退：截断响应（退出码 0）自动回落目录扫描（user + project 均生效）"
+  )
+  check(
+    #warn_log == 1
+      and warn_log[1]:find("myapi3", 1, true) ~= nil
+      and warn_log[1]:find("已回退目录扫描", 1, true) ~= nil,
+    "api 失败告警：每工具只提示一次，说明截断原因与回退后果"
+  )
+  skills.list("myapi3", function() end)
+  check(
+    #vim.tbl_filter(function(c)
+      return c == "fake-skill-cli-3"
+    end, api_calls) == 1 and #warn_log == 1,
+    "api 失败回退：结果进缓存，期内第二次 list 不再 exec 也不再告警"
+  )
+  local api4
+  skills.list("myapi4", function(entries)
+    api4 = entries
+  end)
+  check(
+    api4 and api4[1] and api4[1].id == "big" and #api4[1].description == 220000 and api4[1].path == "/p/big",
+    "api 大响应：合法的 ~220KB 输出照常解析（无 fs 字段）"
+  )
+  check(#warn_log == 1, "api 大响应：成功不触发告警")
+  utils.warn = saved_warn
 
   -- blink 适配层（completion/skills.lua）：按当前工具取数、label 前缀、触发字符判定
   local adapter = require("herder-agents.completion.skills")
@@ -2059,7 +2131,7 @@ local function run_skill_tests()
   skills._reset()
   vim.cmd("cd " .. saved_cwd)
   vim.g.ai_tool = saved_tool
-  for _, name in ipairs({ "myfs", "myfs2", "myapi1", "myapi2" }) do
+  for _, name in ipairs({ "myfs", "myfs2", "myapi1", "myapi2", "myapi3", "myapi4" }) do
     cfg.options.tools[name] = nil
   end
   cfg.options.tool_order = vim.tbl_filter(function(n)

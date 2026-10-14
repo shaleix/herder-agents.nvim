@@ -55,6 +55,8 @@ M.defaults = {
   --                                 <目录>/SKILL.md（frontmatter 的 name/
   --                                 description 可覆盖目录名）；project_up 时
   --                                 project 目录从 cwd 向上逐层搜到 git 根
+  --                 api 与 user/project 可共存：api 拉取失败自动回退 fs 目录
+  --                 扫描并告警一次（CLI 大响应经管道偶发截断的现场兜底）
   tools = { -- opencode: 与 omp 一样用 Esc 中断；ctrl+c 只会清空输入框（双击则退出）。
     -- opencode TUI 的中断是两段式：第一次 Esc 进入待确认态（提示 "ESC again to
     -- interrupt"），第二次 Esc 才真正中断，故默认序列发送两个 esc（单键即中断的
@@ -84,8 +86,16 @@ M.defaults = {
       -- agent working 中也可切（对后续 turn 生效）。若想走退出重启，把此项
       -- 置 nil 并配置 model_resume 模板即可（注意 v2.0.19 的 TUI 顶层不认 -m）
       model_apply = "api",
-      -- skill 补全（"@" 触发）：opencode v2 的 skill.list API（CLI JSON 列表模式）
-      skills = { api = { "opencode", "api", "skill.list" } },
+      -- skill 补全（"@" 触发）：api 主通道 + fs 目录扫描回退（见下）
+      skills = {
+        -- 主通道：v2 API（含 builtin/插件 skill）。CLI 大响应经管道偶发截断
+        -- （退出码 0 但 JSON 不完整），失败时自动回退下面的目录扫描并告警一次
+        api = { "opencode", "api", "skill.list" },
+        -- 回退/目录约定（opencode.ai/docs/skills，含 claude/agents 兼容目录）
+        user = { "~/.config/opencode/skills", "~/.claude/skills", "~/.agents/skills" },
+        project = { ".opencode/skills", ".claude/skills", ".agents/skills" },
+        project_up = true,
+      },
     },
     -- qodercli：技能以 /skill-name 斜杠命令调用（"/" 触发，label 即 id）；
     -- 目录约定：用户级 ~/.agents/skills，项目级 .qoder/skills（仅 cwd 一层）
