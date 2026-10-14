@@ -256,13 +256,47 @@ The prompt popup buffer uses filetype `aider-input`. If
 [blink.cmp](https://github.com/Saghen/blink.cmp) is installed, the plugin
 registers two sources for it by default — no user config needed:
 
-- `herder_skills` — triggered by `@`: completes opencode skills from
-  `opencode api skill.list`, each item carrying description/documentation
+- `herder_skills` — completes the **current tool's** skills (per-tool sources
+  and triggers, see below), each item carrying description/documentation
 - `herder_path` — file paths relative to the current working directory
   (reuses blink.cmp's built-in path source)
 
-The skill list is fetched in the background when the popup opens and cached
-for `completion.skill_ttl` seconds. Disable with `completion = { enabled = false }`.
+The skill list is acquired per current tool from `tools.<name>.skills`
+(acquisition lives in `lua/herder-agents/skills.lua`). Built-in defaults:
+
+| tool | mode | source | trigger | label |
+| --- | --- | --- | --- | --- |
+| opencode | api | `opencode api skill.list` | `@` | `id` |
+| qodercli | fs | user `~/.agents/skills` + project `.qoder/skills` (cwd) | `/` | `id` |
+| pi | fs | user `~/.pi/agent/skills`, `~/.agents/skills` + project `.pi/skills`, `.agents/skills` walked up to the git root | `/` | `skill:<id>` |
+
+Two acquisition modes:
+
+- **api** — `api = { argv }` runs the CLI and parses the JSON response
+  (`{data: [...]}`; `{name, location}` entries are normalized too).
+- **fs** — `user` / `project` (+ `project_up`) directory lists; a directory
+  containing `SKILL.md` is one skill (frontmatter `name:`/`description:`
+  override the directory name, `id` falls back to it). With `project_up`,
+  project dirs are resolved from the cwd up to the git root.
+
+Precedence is first-discovered-wins — user dirs first, then project roots from
+the topmost ancestor down to the cwd (so user > ancestor > cwd, and duplicate
+ids are never emitted). The list is cached per tool (and cwd) for
+`completion.skill_ttl` seconds and refreshed in the background when the popup
+opens; failures degrade silently to the previous/empty list. Tools without a
+`skills` config get no skill completions. Custom tool example:
+
+```lua
+opts = {
+  tools = {
+    codex = {
+      skills = { user = { "~/.codex/skills" }, project = { ".codex/skills" }, trigger = "$" },
+    },
+  },
+}
+```
+
+Disable everything with `completion = { enabled = false }`.
 
 ## API
 

@@ -3,7 +3,8 @@
 -- blink.cmp 是可选依赖：未安装时静默跳过；blink 晚于本插件加载的场景由
 -- FileType aider-input autocmd 兜底（弹窗打开时重试注册并预热 skill 缓存）。
 -- 注册两个 source：
---   herder_skills  opencode skills（"@" 触发，见 completion/skills.lua）
+--   herder_skills  当前工具的 skills 补全（触发字符与数据源见 tools.<name>.skills
+--                  与 skills.lua；completion/skills.lua 仅是 blink 适配层）
 --   herder_path    复用 blink.cmp 内置 path source，按 cwd 补全文件路径
 local M = {}
 
@@ -13,7 +14,6 @@ local registered = false
 ---@param blink table
 ---@return boolean 是否找到了可用的注册 API
 local function register(blink)
-  local config = require("herder-agents.config")
   -- v1 为 add_provider，v2 起改名 add_source_provider，两者都兼容
   local add_provider = blink.add_source_provider or blink.add_provider
   if not add_provider then
@@ -23,7 +23,6 @@ local function register(blink)
   pcall(add_provider, "herder_skills", {
     name = "HerderSkills",
     module = "herder-agents.completion.skills",
-    opts = { ttl = config.options.completion.skill_ttl },
   })
   pcall(add_provider, "herder_path", {
     name = "HerderPath",
@@ -49,14 +48,14 @@ function M.setup()
   end
 
   -- blink 晚于本插件加载时也能注册：弹窗打开（FileType aider-input）时重试
-  -- 一次（setup 幂等），顺带预热 skill 列表缓存
+  -- 一次（setup 幂等），顺带预热当前工具的 skill 列表缓存
   local group = vim.api.nvim_create_augroup("herder-agents-completion", { clear = true })
   vim.api.nvim_create_autocmd("FileType", {
     group = group,
     pattern = "aider-input",
     callback = function()
       M.setup()
-      require("herder-agents.completion.skills").warm()
+      require("herder-agents.skills").warm()
     end,
   })
 

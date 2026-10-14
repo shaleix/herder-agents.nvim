@@ -10,6 +10,7 @@
 - **note** — 锚定在代码行的批注（extmark 跟随编辑），会话内存储；`notes.lua` 是存储，`ui/notes_view.lua` 是评审弹窗。
 - **inline input** — 行内输入框，note 编辑与一次性 line prompt 共用。
 - **attachment** — 随提示词发送的文件上下文；唯一格式由 `context.files_block`（`Relate file:`）生成。
+- **skill source** — skill 补全列表来源（`tools.<name>.skills`）：api 模式（CLI JSON）或 fs 模式（user/project 目录 + SKILL.md frontmatter，向上到仓库根）；获取层收口在 `skills.lua`，`completion/skills.lua` 仅是 blink 适配层。
 - **smoke** — `test/smoke.lua`，唯一测试面；假执行器注入 `utils.set_exec`。
 
 ## 保留决定（详见 docs/adr/0001）

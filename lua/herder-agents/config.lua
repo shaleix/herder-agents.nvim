@@ -45,6 +45,16 @@ M.defaults = {
   --                 兜底）/"opencode"（api session.list 按 pane 目录 + 标题匹配）/
   --                 nil（不捕获；模板不能含 {session}）
   --   quit_cmd      优雅退出命令（默认 "/quit"；opencode 的 /quit 是 /exit 别名）
+  --   skills        skill 补全列表来源（herder_skills source，按当前工具取数，
+  --                 获取层见 skills.lua；未配置 → 该工具无 skill 补全）：
+  --                   trigger       触发字符（默认 "@"；qodercli/pi 用 "/"）
+  --                   label_prefix  补全 label 前缀（默认 ""；pi 的斜杠命令是
+  --                                 /skill:<name>，故前缀配 "skill:"）
+  --                   api = { argv }          CLI JSON 列表模式（响应 {data:[...]}）
+  --                   user / project(+project_up)  文件系统发现模式：递归找
+  --                                 <目录>/SKILL.md（frontmatter 的 name/
+  --                                 description 可覆盖目录名）；project_up 时
+  --                                 project 目录从 cwd 向上逐层搜到 git 根
   tools = { -- opencode: 与 omp 一样用 Esc 中断；ctrl+c 只会清空输入框（双击则退出）。
     -- opencode TUI 的中断是两段式：第一次 Esc 进入待确认态（提示 "ESC again to
     -- interrupt"），第二次 Esc 才真正中断，故默认序列发送两个 esc（单键即中断的
@@ -74,13 +84,37 @@ M.defaults = {
       -- agent working 中也可切（对后续 turn 生效）。若想走退出重启，把此项
       -- 置 nil 并配置 model_resume 模板即可（注意 v2.0.19 的 TUI 顶层不认 -m）
       model_apply = "api",
+      -- skill 补全（"@" 触发）：opencode v2 的 skill.list API（CLI JSON 列表模式）
+      skills = { api = { "opencode", "api", "skill.list" } },
     },
-    qodercli = { title = " Qoder CLI Chat ", paste_wrap = true },
+    -- qodercli：技能以 /skill-name 斜杠命令调用（"/" 触发，label 即 id）；
+    -- 目录约定：用户级 ~/.agents/skills，项目级 .qoder/skills（仅 cwd 一层）
+    qodercli = {
+      title = " Qoder CLI Chat ",
+      paste_wrap = true,
+      skills = {
+        trigger = "/",
+        user = { "~/.agents/skills" },
+        project = { ".qoder/skills" },
+      },
+    },
     crush = { title = " Crush Chat " },
     -- omp: Esc interrupts the running agent; Ctrl+C only clears the editor
     -- (double Ctrl+C shuts omp down), so never send ctrl+c there.
     omp = { title = " Oh My Pi Chat ", interrupt_key = "esc" },
-    pi = { title = " Pi Chat " },
+    -- pi：技能以 /skill:<name> 斜杠命令调用（"/" 触发 + label 前缀 "skill:"）；
+    -- 目录约定：用户级 ~/.pi/agent/skills 与 ~/.agents/skills，项目级
+    -- .pi/skills 与 .agents/skills 从 cwd 向上逐层搜到 git 根
+    pi = {
+      title = " Pi Chat ",
+      skills = {
+        trigger = "/",
+        label_prefix = "skill:",
+        user = { "~/.pi/agent/skills", "~/.agents/skills" },
+        project = { ".pi/skills", ".agents/skills" },
+        project_up = true,
+      },
+    },
     codex = {
       title = " Codex CLI Chat ",
       paste_wrap = true,
@@ -132,11 +166,11 @@ M.defaults = {
   chat_size = { width = 85, height = 35 },
 
   -- 输入弹窗（aider-input filetype）补全：默认注册 blink.cmp 的 herder_skills
-  -- （opencode v2 API：opencode api skill.list，"@" 触发）与 herder_path
-  -- （复用 blink.cmp 内置 path source，按 cwd 补全文件路径）
+  -- （按当前工具的 tools.<name>.skills 取 skill 列表，见 skills.lua）与
+  -- herder_path（复用 blink.cmp 内置 path source，按 cwd 补全文件路径）
   completion = {
     enabled = true,
-    skill_ttl = 300, -- skill 列表缓存秒数
+    skill_ttl = 300, -- skill 列表缓存秒数（按工具 + cwd 分键缓存）
   },
 
   icons = {
