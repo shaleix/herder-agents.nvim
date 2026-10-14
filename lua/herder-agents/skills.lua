@@ -8,6 +8,9 @@
 --             <目录>/SKILL.md，frontmatter 的 name/description 可覆盖目录名
 -- api 与 fs 字段可共存：api 拉取失败（进程出错/非零退出/大响应经管道被截断
 -- 导致 JSON 不完整/缺 data）时自动回退 fs 目录扫描，并每会话每工具告警一次。
+-- api 通道经唯一临时文件中转（utils.exec_async_to_file，规避上游管道截断
+-- anomalyco/opencode#52925，修复 PR #52955 未合并）；上游修复广泛发布后可把
+-- 该中转层与 api 失败回退告警一并移除。
 -- 未配置 skills 的工具没有 skill 列表（list 直接回 {}）。
 --
 -- 缓存按 工具 + cwd（含任一 fs 字段的配置）分键，ttl 取
@@ -200,18 +203,24 @@ local function fs_list(spec, cwd)
 end
 
 -- ---------------------------------------------------------------------------
--- api 模式：CLI JSON 列表
+-- api 模式：CLI JSON 列表（经临时文件中转，规避管道截断 —— 见 utils 的
+-- exec_async_to_file 与下方 _api_timeout_ms 注释）
 -- ---------------------------------------------------------------------------
 
--- 执行 skills.api 的 argv，解析响应 {data:[...]}（兼容 {name, location} 形状）。
--- 失败（非零退出/非 JSON/缺 data）回调 nil，由调用方决定回退（fs 扫描/旧列表/{}）
+-- api 拉取超时（ms）：冷启动时 opencode api 起 CLI 服务端可能要数秒，超时
+-- SIGKILL 后走失败路径（fs 回退/空列表），测试可覆写（同 _reset 注入约定）
+M._api_timeout_ms = 10000
+
+-- 执行 skills.api 的 argv（经临时文件中转），解析响应 {data:[...]}
+-- （兼容 {name, location} 形状）。失败（非零退出/非 JSON/缺 data）回调 nil，
+-- 由调用方决定回退（fs 扫描/旧列表/{}）
 local function api_fetch(spec, on_done)
   local argv = spec.api
   if type(argv) ~= "table" or #argv == 0 then
     on_done(nil)
     return
   end
-  utils.exec_async(argv, function(r)
+  utils.exec_async_to_file(argv, function(r)
     local entries = nil
     if r.code == 0 and r.stdout ~= "" then
       local ok, decoded = pcall(vim.json.decode, r.stdout)
@@ -233,7 +242,7 @@ local function api_fetch(spec, on_done)
       end
     end
     on_done(entries)
-  end)
+  end, M._api_timeout_ms)
 end
 
 -- ---------------------------------------------------------------------------

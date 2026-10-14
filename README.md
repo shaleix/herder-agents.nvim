@@ -282,7 +282,12 @@ Two acquisition modes:
 `api` and the fs dirs can coexist: when the api call fails (exec error, non-zero
 exit, or invalid JSON — e.g. the pipe-truncated large responses above), the fs
 scan runs instead and a warning is shown once per session per tool. Large but
-valid payloads parse fine.
+valid payloads parse fine. The api call itself transports stdout through a
+unique temp file (upstream pipe truncation: Bun's async pipe writes lose the
+buffer when the CLI `process.exit()`s early — anomalyco/opencode#52925, fix PR
+#52955 pending; file redirects are synchronous and complete), with a 10s fetch
+timeout that also degrades to the fs fallback. This transport layer can be
+dropped once the upstream fix ships broadly.
 
 Precedence is first-discovered-wins — user dirs first, then project roots from
 the topmost ancestor down to the cwd (so user > ancestor > cwd, and duplicate

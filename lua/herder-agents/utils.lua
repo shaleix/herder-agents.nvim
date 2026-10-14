@@ -164,6 +164,106 @@ M.exec_async = function(argv, on_done)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- 临时文件中转执行（skills api 专用）：`opencode api skill.list` 等大响应 CLI
+-- 经管道输出偶发被截断 —— Bun 的 pipe 写入是异步的，CLI 先 process.exit() 导致
+-- 缓冲未刷出（退出码仍 0、JSON 不完整；~548KB/65 技能级别必现）。上游 issue
+-- anomalyco/opencode#52925，修复 PR #52955（截至 2026-10 未合并）。文件重定向
+-- 是同步写、始终完整，故经唯一临时文件中转：
+--   sh -c 'exec "$@" > "$0" 2> "$0.err"' <tmp> <argv…>
+-- argv 走位置参数（零引号拼接、零注入面）；exec 替换掉 sh，超时 SIGKILL 命中
+-- 真实进程。stdout/stderr 都重定向进临时文件还有一个关键作用：CLI 被杀后其
+-- 孤儿子进程若仍握着 nvim 的管道，vim.system 会等到管道 EOF 才回调 on_exit
+-- （实测 sleep 5 的孤儿让回调迟到 5s）——全走文件则子进程死、管道即 EOF，
+-- 回调准时。注意杀掉的进程退出码在部分 nvim 版本报告为 0，但 stdout 必不
+-- 完整（空/截断 JSON），失败判定不受影响。
+-- 清理保证：两个临时文件在所有退出路径（成功/非零退出/超时/spawn 失败）均
+-- 删除、零残留；定时器在所有路径均关闭（不留 libuv 句柄，headless 测试才能
+-- 干净退出）。上游修复广泛发布后本层可整体移除（skills.lua 的回退告警同步撤）。
+-- 回调契约与 exec_async 一致：on_done({ code, stdout, stderr })。
+-- ---------------------------------------------------------------------------
+
+local cli_exec_to_file = nil -- 测试注入：临时文件中转执行器 fun(argv, on_done, timeout_ms)
+
+--- 测试注入：覆盖临时文件中转执行器（传 nil 恢复真实执行）
+M.set_exec_to_file = function(fn)
+  cli_exec_to_file = fn
+end
+
+--- 经临时文件中转的异步执行（argv 数组）：stdout 重定向到唯一临时文件再读回，
+--- 规避管道截断（见上方说明）；timeout_ms 给定时 SIGKILL，缺省不设超时
+M.exec_async_to_file = function(argv, on_done, timeout_ms)
+  if cli_exec_to_file then
+    cli_exec_to_file(argv, on_done, timeout_ms)
+    return
+  end
+  -- 无 sh 的奇异平台：退回管道执行（可能受上游截断 bug 影响，聊胜于无；
+  -- 正常平台都有 POSIX sh）
+  if vim.fn.executable("sh") ~= 1 then
+    M.exec_async(argv, on_done)
+    return
+  end
+  local uv = vim.uv or vim.loop
+  local tmp = vim.fn.tempname() .. ".json"
+  local timer = nil
+  local close_timer = function()
+    if timer then
+      pcall(function()
+        if not timer:is_closing() then
+          timer:stop()
+          timer:close()
+        end
+      end)
+      timer = nil
+    end
+  end
+  local cmd = { "sh", "-c", 'exec "$@" > "$0" 2> "$0.err"', tmp }
+  vim.list_extend(cmd, argv)
+  local ok, sys = pcall(vim.system, cmd, { text = true }, function(r)
+    vim.schedule(function()
+      close_timer()
+      -- 先读后删：stdout 仅在退出码 0 时读回；stderr 恒读（失败诊断用）；
+      -- 两个临时文件随后任何路径都删除（零残留）
+      local stdout = ""
+      if r.code == 0 then
+        local ok_read, lines = pcall(vim.fn.readfile, tmp)
+        if ok_read and type(lines) == "table" then
+          stdout = table.concat(lines, "\n")
+        end
+      end
+      local stderr = r.stderr or ""
+      local ok_err, err_lines = pcall(vim.fn.readfile, tmp .. ".err")
+      if ok_err and type(err_lines) == "table" and #err_lines > 0 then
+        stderr = table.concat(err_lines, "\n")
+      end
+      pcall(os.remove, tmp)
+      pcall(os.remove, tmp .. ".err")
+      on_done({ code = r.code, stdout = stdout, stderr = stderr })
+    end)
+  end)
+  if not ok then
+    close_timer() -- timer 尚未创建：no-op（保持"每条路径都收定时器"的形状）
+    pcall(os.remove, tmp)
+    pcall(os.remove, tmp .. ".err")
+    on_done({ code = -1, stdout = "", stderr = tostring(sys) })
+    return
+  end
+  if timeout_ms then
+    timer = uv.new_timer()
+    timer:start(
+      timeout_ms,
+      0,
+      vim.schedule_wrap(function()
+        -- SIGKILL：on_exit 仍会触发（部分 nvim 版本把被杀进程报成 code=0，
+        -- 但 stdout 必不完整 → 调用方的失败判定不受影响），临时文件统一在
+        -- 退出路径清理。注意 SystemObj:kill 是冒号方法，必须显式传 self
+        pcall(sys.kill, sys, 9)
+        close_timer()
+      end)
+    )
+  end
+end
+
 -- herdr CLI 封装（输出 JSON 的子命令，如 pane list / agent list / process-info）：
 -- 失败或输出非 JSON 时返回 nil
 M.herdr_json = function(...)
