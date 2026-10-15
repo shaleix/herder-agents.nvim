@@ -98,13 +98,14 @@ M.defaults = {
       },
     },
     -- qodercli：技能以 /skill-name 斜杠命令调用（"/" 触发，label 即 id）；
-    -- 目录约定：用户级 ~/.agents/skills，项目级 .qoder/skills（仅 cwd 一层）
+    -- 目录约定：用户级 ~/.agents/skills 与 ~/.qoder/skills（官方文档位置），
+    -- 项目级 .qoder/skills（仅 cwd 一层）
     qodercli = {
       title = " Qoder CLI Chat ",
       paste_wrap = true,
       skills = {
         trigger = "/",
-        user = { "~/.agents/skills" },
+        user = { "~/.agents/skills", "~/.qoder/skills" },
         project = { ".qoder/skills" },
       },
     },

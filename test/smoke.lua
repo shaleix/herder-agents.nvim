@@ -1922,6 +1922,11 @@ local function run_skill_tests()
   -- spec / trigger / triggers
   check(skills.spec("myfs") ~= nil and skills.spec("crush") == nil, "skills.spec：配置返回表，未配置 nil")
   check(skills.trigger("myfs") == "/" and skills.trigger("crush") == "@", "trigger：默认 @，配置覆盖为 /")
+  check(
+    vim.tbl_contains(skills.spec("qodercli").user, "~/.agents/skills")
+      and vim.tbl_contains(skills.spec("qodercli").user, "~/.qoder/skills"),
+    "qodercli 默认 user 目录含 ~/.agents/skills 与 ~/.qoder/skills"
+  )
   local trigs = skills.triggers()
   check(
     vim.tbl_contains(trigs, "@") and vim.tbl_contains(trigs, "/"),

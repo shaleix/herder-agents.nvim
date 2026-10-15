@@ -267,7 +267,7 @@ The skill list is acquired per current tool from `tools.<name>.skills`
 | tool | mode | source | trigger | label |
 | --- | --- | --- | --- | --- |
 | opencode | api + fs fallback | `opencode api skill.list` (includes built-in/plugin skills); when it fails — the CLI intermittently truncates huge piped responses (exit code 0 but invalid JSON) — falls back to user `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` + project `.opencode/skills`, `.claude/skills`, `.agents/skills` up to the git root | `@` | `id` |
-| qodercli | fs | user `~/.agents/skills` + project `.qoder/skills` (cwd) | `/` | `id` |
+| qodercli | fs | user `~/.agents/skills`, `~/.qoder/skills` + project `.qoder/skills` (cwd) | `/` | `id` |
 | pi | fs | user `~/.pi/agent/skills`, `~/.agents/skills` + project `.pi/skills`, `.agents/skills` walked up to the git root | `/` | `skill:<id>` |
 
 Two acquisition modes:
