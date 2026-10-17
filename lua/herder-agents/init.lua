@@ -50,6 +50,17 @@ function M.setup(opts)
   setup_commands()
   setup_keymaps()
 
+  -- agent 提问提示（llm.hint 可关）：status 轮询发出 AIAgentBlocked 时提醒 :AIQuestion。
+  -- 订阅既有 User 事件，不新建轮询（status_poll 未开启时事件不会出现，零开销）
+  if (config.options.llm or {}).hint ~= false then
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "AIAgentBlocked",
+      callback = function(ev)
+        require("herder-agents.question").notify_blocked(ev.data or {})
+      end,
+    })
+  end
+
   -- agent 状态轮询（默认关闭）：开启后发出 AIAgentWorking/Idle/Blocked User 事件
   local poll = config.options.status_poll
   if poll and poll.enabled and vim.env.HERDR_ENV == "1" then
@@ -100,6 +111,28 @@ setup_commands = function()
       require("herder-agents.delivery").drop_all()
     end, {
       desc = "Drop queued AI prompts",
+    })
+  end
+
+  -- agent 提问表单：捕获当前 agent 终端 → LLM 提取问题 → 表单作答
+  -- （提交经 delivery 文本通道送回 —— agent blocked 时 agent prompt 会拒收）
+  if cmds.question then
+    vim.api.nvim_create_user_command(cmds.question, function()
+      require("herder-agents.question").ask()
+    end, {
+      desc = "Extract the agent's question into an answer form",
+    })
+  end
+
+  -- 开发命令：本地文件 / 当前 buffer 顶替 agent 终端捕获，驱动提问表单
+  -- （.json 文件 = LLM 响应 fixture；提交只打日志、绝不投递 —— 弹窗测试 / 提示词调优）
+  if cmds.question_dev then
+    vim.api.nvim_create_user_command(cmds.question_dev, function(opts)
+      require("herder-agents.question").ask_dev(opts.args ~= "" and opts.args or nil)
+    end, {
+      nargs = "?",
+      complete = "file",
+      desc = "Drive the question form from a file or buffer (dev; answers are not sent)",
     })
   end
 
@@ -235,6 +268,11 @@ setup_keymaps = function()
   map("model", { "n", "x" }, function()
     M.switch_model()
   end, "AI switch model")
+
+  -- agent 提问表单：捕获 → LLM 提取 → 表单作答（:AIQuestion 同效）
+  map("question", { "n" }, function()
+    require("herder-agents.question").ask()
+  end, "AI question form (extract & answer)")
 end
 
 -- ---------------------------------------------------------------------------

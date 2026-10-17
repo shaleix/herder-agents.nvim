@@ -119,6 +119,73 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 - `:AISwitch [tool]` — switch tool (no argument cycles); like `<leader>ht`, replaces the agent pane
 - `:HerdrShrinkToggle` — width toggle: switch between `toggle_ratio` and the default split ratio (same as `keys.shrink_toggle`)
 - `:AIDropQueue` — drop prompts queued while no agent was ready
+- `:AIQuestion` — extract the agent's pending question into an answer form (see below)
+- `:AIQuestionDev [file]` — dev: drive the question form from a local file or the current buffer (see below)
+
+## Agent question form
+
+When an agent stops to ask you something (choices, confirmations), `:AIQuestion`
+turns the pane output back into an interactive form. The popup opens
+immediately as a loading skeleton (staged text: capturing → extracting →
+read-more round N/M → retry, with a spinner; `esc` cancels and discards the
+late LLM result) and morphs in place into the form once extraction finishes:
+
+1. Capture the current tool's pane via `herdr agent read --lines <start_lines>`
+   (default 80).
+2. Ask an LLM to normalize it into strict JSON — one entry per question the
+   agent is asking (`questions[]`, each with `options`/`multiple`/`suggested`).
+   The model may answer `need_more`, which doubles the captured lines and
+   re-asks (read-more loop, `max_read_more` cap); invalid JSON is retried once
+   with the failure reason (`retries`).
+3. Render a popup form with a fixed height (`question_form.height_ratio`,
+   default 60% — identical across loading/form/fallback, no resize on morph).
+   Each question is its own section separated by `---` rules (the buffer is
+   `filetype=markdown` with `buftype=nofile`: syntax highlighting applies,
+   markdown preview plugins don't attach). `space` toggles options (radio when
+   single-choice, checkbox when `multiple`; `suggested` items pre-selected and
+   get the initial cursor), every question has a `✎ custom answer` row that
+   rebinds the bottom input line to that question, `tab` moves between options
+   and input, `ctrl+enter` submits, `esc` cancels. A question with nothing
+   selected and no custom text blocks the submit. Submission is the selected
+   option texts verbatim plus custom lines — unlabeled for a single question,
+   `Qk:` blocks separated by blank lines when there are several — sent back
+   through the delivery **text channel** (a blocked agent refuses
+   `herdr agent prompt`, so send-text + submit key is the only channel that
+   reaches it).
+4. Anything the LLM cannot parse — `no_question`, retries exhausted, missing
+   API key — still opens the form in fallback mode: read-only raw capture plus
+   the custom-answer line, so you can always answer without leaving nvim.
+
+The LLM call is a small adapter (`llm.lua`, ADR-0002): built-in OpenAI-compatible
+HTTP via curl, DeepSeek out of the box (`DEEPSEEK_API_KEY`), no LLM plugin
+dependency; override the endpoint/model or plug a custom adapter via `llm.*`
+options. With `status_poll` enabled, an agent turning `blocked` emits
+`AIAgentBlocked`, which surfaces a hint to run `:AIQuestion` (disable with
+`llm.hint = false`).
+
+```lua
+require("herder-agents").setup({
+  llm = {
+    base_url = "https://api.deepseek.com",
+    api_key_env = "DEEPSEEK_API_KEY",
+    model = "deepseek-chat",
+    start_lines = 80,  -- first capture; doubled on need_more
+    max_read_more = 2, -- read-more rounds
+    retries = 1,       -- invalid-JSON retries (failure reason attached)
+    hint = true,       -- notify :AIQuestion on AIAgentBlocked
+  },
+})
+```
+
+**Dev command.** `:AIQuestionDev [file]` drives the same form from local
+content instead of a live agent — for popup-rendering tests and extraction
+prompt tuning. A `.json` file (or a json buffer, when called without an
+argument) is treated as an LLM-response fixture: no network, it goes straight
+through validation into the form (invalid fixtures fall back and show why).
+Anything else (`.txt` capture snapshots, or the current buffer) runs the full
+pipeline against the real LLM. Submitting in dev mode never delivers to the
+agent: the composed text is printed to `:messages`, along with the raw LLM
+response and stats (question count, read-more rounds, retries, elapsed ms).
 
 ## Prompt delivery
 

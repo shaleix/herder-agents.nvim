@@ -2306,4 +2306,715 @@ utils.set_exec_to_file(nil)
 utils.set_exec_async(nil)
 delivery._reset()
 
+-- ---------------------------------------------------------------------------
+-- agent 提问表单（llm.lua + question.lua，ADR-0002）：全 headless、假执行器；
+-- ui/question_form.lua 由并行 lane 实现 —— 这里用 package.preload stub。
+-- ---------------------------------------------------------------------------
+local function run_question_tests()
+local llm = require("herder-agents.llm")
+local question_mod = require("herder-agents.question")
+
+-- question_form stub：按 UI 契约实现 open_loading 句柄 —— 记录 open_loading()
+-- 调用次数 / set_stage 阶段序列 / morph_to(spec) 列表；closed 句柄上
+-- set_stage / morph_to 均 no-op；测试直接置 handle.closed = true 模拟 esc 取消
+local form_specs, form_submit = {}, nil
+local loading_calls, stage_log, loading_handles = 0, {}, {}
+package.preload["herder-agents.ui.question_form"] = function()
+  return {
+    open_loading = function()
+      loading_calls = loading_calls + 1
+      local handle = { closed = false }
+      table.insert(loading_handles, handle)
+      function handle.set_stage(stage, detail)
+        if handle.closed then
+          return
+        end
+        table.insert(stage_log, { stage = stage, detail = detail })
+      end
+      function handle.morph_to(spec, on_submit)
+        if handle.closed then
+          return
+        end
+        table.insert(form_specs, spec)
+        form_submit = on_submit
+      end
+      function handle.close()
+        handle.closed = true
+      end
+      return handle
+    end,
+  }
+end
+
+-- 命令注册与 llm 默认配置
+check(vim.api.nvim_get_commands({}).AIQuestion ~= nil, ":AIQuestion 命令已注册")
+check(
+  cfg.options.llm.base_url == "https://api.deepseek.com"
+    and cfg.options.llm.api_key_env == "DEEPSEEK_API_KEY"
+    and cfg.options.llm.model == "deepseek-chat",
+  "llm 默认 base_url / api_key_env / model（DeepSeek 开箱）"
+)
+check(
+  cfg.options.llm.timeout_ms == 30000 and cfg.options.llm.temperature == 0,
+  "llm 默认 timeout_ms=30000 / temperature=0"
+)
+check(
+  cfg.options.llm.start_lines == 80
+    and cfg.options.llm.max_read_more == 2
+    and cfg.options.llm.retries == 1,
+  "llm 默认 start_lines=80 / max_read_more=2 / retries=1"
+)
+check(cfg.options.llm.enabled == true and cfg.options.llm.hint == true, "llm 默认 enabled/hint 开启")
+check(
+  type(cfg.options.question_form) == "table" and cfg.options.question_form.height_ratio == 0.6,
+  "question_form.height_ratio 默认 0.6（弹窗固定高度 = 编辑器行数 × ratio）"
+)
+
+local qa_saved_llm = vim.deepcopy(cfg.options.llm)
+local qa_saved_tool = vim.g.ai_tool
+local qa_saved_key = vim.env.DEEPSEEK_API_KEY
+
+-- llm.ask：假 curl（模拟 exec_async_to_file：响应写临时输出文件再读回）→ 正常 JSON 解码
+vim.env.DEEPSEEK_API_KEY = "test-key"
+local to_file_calls = {}
+utils.set_exec_to_file(function(argv, on_done, timeout_ms)
+  table.insert(to_file_calls, { argv = argv, timeout_ms = timeout_ms })
+  local f = vim.fn.tempname() .. ".json"
+  vim.fn.writefile(
+    { vim.json.encode({ choices = { { message = { content = vim.json.encode({ hello = "world" }) } } } }) },
+    f
+  )
+  local out = table.concat(vim.fn.readfile(f), "\n")
+  os.remove(f)
+  on_done({ code = 0, stdout = out, stderr = "" })
+end)
+local ask_obj, ask_err
+llm.ask({ system = "sys", user = "usr", timeout_ms = 15000 }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(ask_obj ~= nil and ask_err == nil and ask_obj.hello == "world", "llm.ask 成功解码 choices[1].message.content")
+local qcall = to_file_calls[1]
+check(qcall ~= nil and qcall.argv[1] == "curl", "内置实现经 curl（exec_async_to_file 通道）")
+check(qcall.timeout_ms == 15000, "timeout_ms 透传 exec_async_to_file（SIGKILL 兜底）")
+local qjoined = table.concat(qcall.argv, " ")
+check(qjoined:find("/chat/completions", 1, true) ~= nil, "请求 OpenAI 兼容 /chat/completions")
+check(qjoined:find("Authorization: Bearer test-key", 1, true) ~= nil, "携带 Authorization header")
+check(
+  qjoined:find("response_format", 1, true) ~= nil and qjoined:find("json_object", 1, true) ~= nil,
+  "body 含 response_format=json_object"
+)
+check(vim.tbl_contains(qcall.argv, "-m") and vim.tbl_contains(qcall.argv, "15"), "curl -m 应用层超时（秒）")
+
+-- llm.ask 失败面：curl 非零 / HTTP 坏 JSON / content 坏 JSON
+utils.set_exec_to_file(function(argv, on_done)
+  on_done({ code = 7, stdout = "", stderr = "connection refused" })
+end)
+ask_obj, ask_err = nil, nil
+llm.ask({ system = "s", user = "u" }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(
+  ask_obj == nil and type(ask_err) == "string" and ask_err:find("connection refused", 1, true) ~= nil,
+  "curl 非零退出 → nil + err"
+)
+
+utils.set_exec_to_file(function(argv, on_done)
+  on_done({ code = 0, stdout = "not json at all", stderr = "" })
+end)
+ask_obj, ask_err = nil, nil
+llm.ask({ system = "s", user = "u" }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(ask_obj == nil and type(ask_err) == "string", "HTTP 响应坏 JSON → nil + err")
+
+utils.set_exec_to_file(function(argv, on_done)
+  on_done({ code = 0, stdout = vim.json.encode({ choices = { { message = { content = "{oops" } } } }), stderr = "" })
+end)
+ask_obj, ask_err = nil, nil
+llm.ask({ system = "s", user = "u" }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(ask_obj == nil and type(ask_err) == "string", "message.content 坏 JSON → nil + err")
+
+-- 缺 api_key（内置通道）：nil + err 且不起子进程
+local key_probe_calls = 0
+utils.set_exec_to_file(function(argv, on_done)
+  key_probe_calls = key_probe_calls + 1
+  on_done({ code = 1, stdout = "", stderr = "" })
+end)
+vim.env.DEEPSEEK_API_KEY = nil
+ask_obj, ask_err = nil, nil
+llm.ask({ system = "s", user = "u" }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(
+  ask_obj == nil and type(ask_err) == "string" and ask_err:find("DEEPSEEK_API_KEY", 1, true) ~= nil,
+  "缺 api_key → nil + err（含 env 变量名）"
+)
+check(key_probe_calls == 0, "缺 api_key 不起子进程")
+vim.env.DEEPSEEK_API_KEY = "test-key"
+
+-- adapter 覆盖（仿 utils.set_exec 注入惯例）
+llm.set_adapter(function(opts, cb)
+  cb({ via = "adapter", user = opts.user }, nil)
+end)
+ask_obj, ask_err = nil, nil
+llm.ask({ system = "s", user = "usr2" }, function(obj, err)
+  ask_obj, ask_err = obj, err
+end)
+check(ask_obj ~= nil and ask_obj.via == "adapter" and ask_obj.user == "usr2", "set_adapter 覆盖内置实现")
+llm.set_adapter(nil)
+
+-- ---------------------------------------------------------------------------
+-- 编排（question.ask）：need_more 翻倍重读 / 失败重试 / fallback / 文本通道提交
+-- ---------------------------------------------------------------------------
+cfg.options.tools.qatool = { title = " QA Chat ", paste_wrap = true }
+table.insert(cfg.options.tool_order, "qatool")
+cfg.set_current_tool("qatool")
+
+delivery._reset()
+local read_log = {} -- 每次 `herdr agent read` 的 --lines 值
+local read_pages = {} -- 按调用序弹出的捕获文本（空则默认文本）
+local submitted = {} -- send-text / send-keys / agent prompt 记录
+local qa_agents = { qa1 = "blocked" } -- 已注册且 blocked：提交必须强制文本通道
+local qa_exec = function(argv)
+  if argv[2] == "agent" and argv[3] == "read" then
+    table.insert(read_log, tonumber(argv[6]))
+    return { code = 0, stdout = (table.remove(read_pages, 1) or "agent asks: pick one? [1] yes [2] no"), stderr = "" }
+  end
+  if argv[2] == "agent" and argv[3] == "prompt" then
+    table.insert(submitted, { kind = "prompt", payload = argv[5] })
+    return { code = 0, stdout = "", stderr = "" }
+  end
+  if argv[2] == "agent" and argv[3] == "list" then
+    local agents = {}
+    for pid, st in pairs(qa_agents) do
+      table.insert(agents, { pane_id = pid, agent = "qa", agent_status = st, cwd = "/tmp" })
+    end
+    return { code = 0, stdout = vim.json.encode({ result = { agents = agents } }) }
+  end
+  if argv[2] == "pane" and argv[3] == "current" then
+    return { code = 0, stdout = vim.json.encode({ result = { pane = { tab_id = "tq" } } }) }
+  end
+  if argv[2] == "pane" and argv[3] == "list" then
+    return {
+      code = 0,
+      stdout = vim.json.encode({ result = { panes = { { label = "qatool", tab_id = "tq", pane_id = "qa1" } } } }),
+    }
+  end
+  if argv[2] == "pane" and argv[3] == "process-info" then
+    return {
+      code = 0,
+      stdout = vim.json.encode({
+        result = {
+          process_info = {
+            shell_pid = 1,
+            foreground_processes = { { pid = 2 } },
+            foreground_process_group_id = 2,
+          },
+        },
+      }),
+    }
+  end
+  if argv[3] == "send-text" then
+    table.insert(submitted, { kind = "text", payload = argv[5] })
+    return { code = 0, stdout = "", stderr = "" }
+  end
+  if argv[3] == "send-keys" then
+    table.insert(submitted, { kind = "key", key = argv[5] })
+    return { code = 0, stdout = "", stderr = "" }
+  end
+  return { code = 0, stdout = "", stderr = "" }
+end
+utils.set_exec(qa_exec)
+utils.set_exec_async(function(argv, on_done)
+  on_done({ code = 0, stdout = "", stderr = "" })
+end)
+
+-- 编排用 adapter：按脚本回放（string = 模拟失败，table = 已解码的提取 JSON）
+local adapter_log = {}
+local script = {}
+local script_adapter = function(opts, cb)
+  table.insert(adapter_log, { system = opts.system, user = opts.user })
+  local r = table.remove(script, 1)
+  if type(r) == "string" then
+    cb(nil, r)
+    return
+  end
+  cb(r, nil)
+end
+llm.set_adapter(script_adapter)
+
+-- 1) 多问题提取：need_more → 行数翻倍重读 → 2 题 complete 出 form 表单
+script = {
+  { status = "need_more" },
+  {
+    status = "complete",
+    questions = {
+      { question = "Proceed?", options = { "yes", "no" }, multiple = false, suggested = { 1 } },
+      { question = "Pick a model?", options = { "glm-5", "glm-4" }, multiple = true, suggested = {} },
+    },
+  },
+}
+form_specs = {}
+read_log = {}
+question_mod.ask()
+check(#read_log == 2 and read_log[1] == 80 and read_log[2] == 160, "need_more → --lines 翻倍重读（80 → 160）")
+check(#form_specs == 1 and form_specs[1].mode == "form", "complete → form 表单")
+check(
+  type(form_specs[1].questions) == "table"
+    and #form_specs[1].questions == 2
+    and form_specs[1].question == nil,
+  "morph spec 携带 questions[]（2 题；不再有旧顶层 question 字段）"
+)
+check(
+  form_specs[1].questions[1].question == "Proceed?"
+    and form_specs[1].questions[1].options[1] == "yes"
+    and form_specs[1].questions[1].options[2] == "no",
+  "morph spec 第 1 题逐字携带 question/options"
+)
+check(
+  form_specs[1].questions[1].multiple == false and form_specs[1].questions[1].suggested[1] == 1,
+  "morph spec 第 1 题携带 multiple/suggested"
+)
+check(
+  form_specs[1].questions[2].question == "Pick a model?"
+    and form_specs[1].questions[2].options[2] == "glm-4"
+    and form_specs[1].questions[2].multiple == true
+    and type(form_specs[1].questions[2].suggested) == "table"
+    and #form_specs[1].questions[2].suggested == 0,
+  "morph spec 第 2 题逐字携带 question/options/multiple/suggested（空数组保留）"
+)
+
+-- 1b) N=1 回归：单题 complete 的 morph spec 是 questions 长度 1（suggested 缺省归一为空数组）
+script = {
+  { status = "complete", questions = { { question = "Solo?", options = { "a" }, multiple = false } } },
+}
+form_specs = {}
+question_mod.ask()
+check(
+  #form_specs == 1
+    and form_specs[1].mode == "form"
+    and type(form_specs[1].questions) == "table"
+    and #form_specs[1].questions == 1
+    and form_specs[1].questions[1].question == "Solo?"
+    and form_specs[1].questions[1].options[1] == "a"
+    and form_specs[1].questions[1].multiple == false
+    and type(form_specs[1].questions[1].suggested) == "table"
+    and #form_specs[1].questions[1].suggested == 0
+    and form_specs[1].options == nil
+    and form_specs[1].suggested == nil,
+  "单题 complete → spec.questions 长度 1（每题字段齐全，无旧顶层字段）"
+)
+
+-- 2) 无效 JSON 重试 1 次后成功（重试 system 附上次失败原因；不重读终端）
+script = { "simulated bad json", { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = true } } } }
+form_specs = {}
+read_log = {}
+adapter_log = {}
+question_mod.ask()
+check(#read_log == 1, "重试不重读终端（agent read 仅 1 次）")
+check(#adapter_log == 2, "失败后重试 1 次（ask 共 2 次）")
+check(adapter_log[2].system:find("simulated bad json", 1, true) ~= nil, "重试 system 附上次失败原因")
+check(
+  form_specs[1] ~= nil and form_specs[1].mode == "form" and form_specs[1].questions[1].multiple == true,
+  "重试成功出 form 表单"
+)
+
+-- 3) 两次失败 → fallback（raw_text 携带捕获文本）
+script = { "http 500", "still failing" }
+form_specs = {}
+question_mod.ask()
+check(#form_specs == 1 and form_specs[1].mode == "fallback", "两次失败 → fallback 表单")
+check(type(form_specs[1].raw_text) == "string" and #form_specs[1].raw_text > 0, "fallback 携带捕获文本")
+
+-- 4) no_question → fallback；complete 但 questions 空数组/缺失视为 no_question
+script = { { status = "no_question" } }
+form_specs = {}
+question_mod.ask()
+check(form_specs[1].mode == "fallback", "no_question → fallback 表单")
+script = { { status = "complete", questions = {} } }
+form_specs = {}
+question_mod.ask()
+check(form_specs[1].mode == "fallback", "complete 且 questions 空数组视为 no_question → fallback")
+
+-- 4b) 校验失败（题内 suggested 越界 → 整体无效）：无效 → 重试 → 仍失败 fallback
+script = {
+  {
+    status = "complete",
+    questions = {
+      { question = "Q1", options = { "a" }, multiple = false },
+      { question = "Q2", options = { "b" }, multiple = false, suggested = { 5 } },
+    },
+  },
+  {
+    status = "complete",
+    questions = {
+      { question = "Q1", options = { "a" }, multiple = false },
+      { question = "Q2", options = { "b" }, multiple = false, suggested = { 9 } },
+    },
+  },
+}
+
+form_specs = {}
+adapter_log = {}
+question_mod.ask()
+check(#adapter_log == 2, "题内 suggested 越界 → 整体无效并重试")
+check(form_specs[1].mode == "fallback", "无效重试后仍失败 → fallback")
+
+-- 4c) 阶段流：capture → extract → read_more "1/2" → complete 原位 morph（loading 恰一次）
+script = {
+  { status = "need_more" },
+  { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = false } } },
+}
+form_specs, stage_log, loading_handles = {}, {}, {}
+local lc0 = loading_calls
+question_mod.ask()
+check(loading_calls == lc0 + 1, "ask 开场即 open_loading（恰一次）")
+check(
+  #stage_log == 3
+    and stage_log[1].stage == "capture"
+    and stage_log[1].detail == nil
+    and stage_log[2].stage == "extract"
+    and stage_log[2].detail == nil
+    and stage_log[3].stage == "read_more"
+    and stage_log[3].detail == "1/2",
+  "阶段序列 capture → extract → read_more（detail 携带 N/M）"
+)
+check(#form_specs == 1 and form_specs[1].mode == "form", "完成后原位 morph_to form 表单")
+
+-- 4d) 重试轮阶段：retry 携带上次失败原因
+script = { "simulated bad json", { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = true } } } }
+form_specs, stage_log = {}, {}
+question_mod.ask()
+check(
+  #stage_log == 3
+    and stage_log[1].stage == "capture"
+    and stage_log[2].stage == "extract"
+    and stage_log[3].stage == "retry"
+    and stage_log[3].detail == "simulated bad json",
+  '重试轮 set_stage("retry") 且 detail 为上次失败原因'
+)
+check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].multiple == true, "重试成功原位 morph form 表单")
+
+-- 4e) capture 失败：仍先 open_loading，再 morph fallback（raw_text 为空串）
+form_specs, stage_log = {}, {}
+local lc1 = loading_calls
+utils.set_exec(function(argv)
+  if argv[2] == "agent" and argv[3] == "read" then
+    return { code = 1, stdout = "", stderr = "read boom" }
+  end
+  return qa_exec(argv)
+end)
+question_mod.ask()
+utils.set_exec(qa_exec)
+check(loading_calls == lc1 + 1, "capture 失败路径仍先 open_loading")
+check(
+  #form_specs == 1 and form_specs[1].mode == "fallback" and form_specs[1].raw_text == "",
+  "capture 失败 → morph fallback（raw_text 空文本）"
+)
+
+-- 5) 提交：表单回调 text → delivery 文本通道 send-text（原文逐行 + 括号粘贴）+ 提交键；
+--    qa1 已注册且 blocked —— 不允许出现 agent prompt（agent_blocked 拒收面）
+script = {
+  { status = "complete", questions = { { question = "Approve?", options = { "allow", "deny" }, multiple = false, suggested = {} } } },
+}
+form_specs = {}
+question_mod.ask()
+check(form_specs[1].mode == "form", "form 表单已打开（提交用例前置）")
+submitted = {}
+form_submit("allow\ncustom note")
+local q_sent_text, q_sent_key, saw_prompt = nil, nil, false
+for _, s in ipairs(submitted) do
+  if s.kind == "text" then
+    q_sent_text = s.payload
+  end
+  if s.kind == "key" then
+    q_sent_key = s.key
+  end
+  if s.kind == "prompt" then
+    saw_prompt = true
+  end
+end
+check(q_sent_text ~= nil, "提交经 send-text（delivery 文本通道）")
+check(
+  q_sent_text:find("allow", 1, true) ~= nil and q_sent_text:find("custom note", 1, true) ~= nil,
+  "send-text 携带原文逐行文本"
+)
+check(q_sent_text:find("\27[200~", 1, true) ~= nil, "多行答案经括号粘贴编码（防逐行误提交）")
+check(q_sent_key == "enter", "提交键 enter 已发送")
+check(not saw_prompt, "blocked 注册 agent 不走 agent prompt（agent_blocked 拒收面）")
+check(cfg.options.delivery.agent_channel == true, "文本通道圈定已复原（不影响后续投递）")
+
+-- 5b) esc 取消：closed 句柄后迟到的 llm 回调不 morph、不开表单、不再 warn；
+--     closed 句柄上 set_stage / morph_to 均 no-op（UI 契约）
+local held_cb
+llm.set_adapter(function(opts, cb)
+  held_cb = cb -- 挂起回调：模拟异步迟到投递
+end)
+script = {}
+form_specs, stage_log, loading_handles = {}, {}, {}
+question_mod.ask()
+check(#loading_handles == 1 and loading_handles[1].closed == false, "esc 用例前置：loading 已开且未 closed")
+check(
+  stage_log[1].stage == "capture" and stage_log[2].stage == "extract",
+  "esc 用例前置：骨架已进入 extract 阶段"
+)
+loading_handles[1].closed = true -- 模拟 esc 取消
+local esc_notify = {}
+local qa_saved_notify_esc = vim.notify
+vim.notify = function(msg)
+  table.insert(esc_notify, tostring(msg))
+end
+held_cb({ status = "complete", questions = { { question = "Q", options = { "a" }, multiple = false } } }, nil)
+vim.notify = qa_saved_notify_esc
+check(#form_specs == 0, "esc 后迟到回调不 morph（不开表单）")
+check(#esc_notify == 0, "esc 后迟到回调不再 warn/notify 打扰")
+loading_handles[1].set_stage("extract", "late")
+loading_handles[1].morph_to({ mode = "form" }, function() end)
+check(#form_specs == 0 and #stage_log == 2, "closed 句柄 set_stage/morph_to 均 no-op")
+llm.set_adapter(script_adapter)
+
+-- 6) 提示层：AIAgentBlocked 提醒（llm.hint 开关）
+local notified = {}
+local qa_saved_notify = vim.notify
+vim.notify = function(msg)
+  table.insert(notified, tostring(msg))
+end
+question_mod.notify_blocked({ tool = "opencode", pane_id = "p9" })
+check(#notified == 1 and notified[1]:find(":AIQuestion", 1, true) ~= nil, "blocked 提醒含 :AIQuestion 指引")
+cfg.options.llm.hint = false
+question_mod.notify_blocked({ tool = "opencode" })
+check(#notified == 1, "llm.hint=false 时静默")
+vim.notify = qa_saved_notify
+
+-- ---------------------------------------------------------------------------
+-- 7) :AIQuestionDev —— 本地文件 / 当前 buffer 驱动提问表单（dev，提交不投递）
+-- ---------------------------------------------------------------------------
+local dev_cmds = vim.api.nvim_get_commands({})
+check(dev_cmds.AIQuestionDev ~= nil, ":AIQuestionDev 命令已注册")
+check(
+  dev_cmds.AIQuestionDev.nargs == "?" and dev_cmds.AIQuestionDev.complete == "file",
+  ":AIQuestionDev 定义为 -nargs=? -complete=file"
+)
+
+-- 7a) .json 文件 = fixture：validate 后 morph form；adapter 不被调用、无终端捕获
+local dev_fix = vim.fn.tempname() .. ".json"
+vim.fn.writefile({
+  vim.json.encode({
+    status = "complete",
+    questions = { { question = "Proceed?", options = { "yes", "no" }, multiple = false, suggested = { 1 } } },
+  }),
+}, dev_fix)
+form_specs, stage_log, read_log, adapter_log, submitted = {}, {}, {}, {}, {}
+local dev_lc0 = loading_calls
+question_mod.ask_dev(dev_fix)
+check(loading_calls == dev_lc0 + 1, "fixture 模式同样开场 open_loading（恰一次）")
+check(#form_specs == 1 and form_specs[1].mode == "form", "有效 fixture → morph form 表单")
+check(
+  type(form_specs[1].questions) == "table"
+    and #form_specs[1].questions == 1
+    and form_specs[1].questions[1].question == "Proceed?"
+    and form_specs[1].questions[1].options[1] == "yes"
+    and form_specs[1].questions[1].options[2] == "no"
+    and form_specs[1].questions[1].multiple == false
+    and form_specs[1].questions[1].suggested[1] == 1,
+  "fixture morph spec questions[] 逐字段携带每题字段"
+)
+check(#adapter_log == 0 and #read_log == 0, "fixture 模式跳过网络与终端（adapter 与 herdr read 均未被调用）")
+
+-- 7b) fixture decode 失败：warn 附原因 + 原文进 :messages → fallback（原文预览），无投递
+vim.fn.writefile({ "{definitely not json" }, dev_fix)
+form_specs, submitted, read_log = {}, {}, {}
+local dev_notes = {}
+local dev_saved_notify = vim.notify
+vim.notify = function(msg, level)
+  table.insert(dev_notes, { msg = tostring(msg), level = level })
+end
+question_mod.ask_dev(dev_fix)
+local dev_bad_json_warn
+for _, n in ipairs(dev_notes) do
+  if n.level == vim.log.levels.WARN and n.msg:find("解析失败", 1, true) then
+    dev_bad_json_warn = n.msg
+  end
+end
+check(dev_bad_json_warn ~= nil, "坏 JSON fixture → warn 附解析原因")
+check(
+  #form_specs == 1 and form_specs[1].mode == "fallback" and form_specs[1].raw_text == "{definitely not json",
+  "坏 JSON fixture → fallback 表单（raw_text = 原文预览）"
+)
+check(#submitted == 0, "坏 JSON fixture 不产生任何投递")
+
+-- 7c) fixture 校验无效（合法 JSON 坏 schema）：warn 附原因 → fallback，无投递
+vim.fn.writefile({
+  vim.json.encode({ status = "complete", questions = { { question = "Q", options = {}, multiple = false } } }),
+}, dev_fix)
+form_specs, submitted = {}, {}
+dev_notes = {}
+question_mod.ask_dev(dev_fix)
+local dev_bad_schema_warn
+for _, n in ipairs(dev_notes) do
+  if n.level == vim.log.levels.WARN and n.msg:find("校验无效", 1, true) then
+    dev_bad_schema_warn = n.msg
+  end
+end
+check(dev_bad_schema_warn ~= nil, "校验无效 fixture → warn 附失败原因")
+check(
+  #form_specs == 1 and form_specs[1].mode == "fallback" and form_specs[1].raw_text:find("options", 1, true) ~= nil,
+  "校验无效 fixture → fallback（原文预览）"
+)
+check(#submitted == 0, "校验无效 fixture 不产生任何投递")
+vim.notify = dev_saved_notify
+
+-- 7d) 非 json 文件 = 全真：文件全文作为捕获文本（走注入 adapter），出 form 表单
+local dev_txt = vim.fn.tempname() .. ".txt"
+vim.fn.writefile({ "agent asks: pick one?", "[1] yes [2] no" }, dev_txt)
+script = { { status = "complete", questions = { { question = "Pick?", options = { "yes", "no" }, multiple = false } } } }
+form_specs, adapter_log, stage_log, read_log = {}, {}, {}, {}
+dev_notes = {}
+vim.notify = function(msg)
+  table.insert(dev_notes, tostring(msg))
+end
+question_mod.ask_dev(dev_txt)
+check(
+  #adapter_log == 1
+    and adapter_log[1].user:find("agent asks: pick one?", 1, true) ~= nil
+    and adapter_log[1].user:find("[1] yes [2] no", 1, true) ~= nil,
+  "全真模式：文件全文作为捕获文本送 LLM（adapter 真调用一次）"
+)
+check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Pick?", "全真模式 → form 表单")
+check(#read_log == 0, "全真模式不捕获 herdr 终端（文件顶替 capture）")
+local dev_stats_msg, dev_raw_msg
+for _, m in ipairs(dev_notes) do
+  if m:find("AIQuestionDev", 1, true) and m:find("统计", 1, true) then
+    dev_stats_msg = m
+  end
+  if m:find("原始 LLM JSON 响应", 1, true) then
+    dev_raw_msg = m
+  end
+end
+check(
+  dev_stats_msg ~= nil
+    and dev_stats_msg:find("题数=1", 1, true) ~= nil
+    and dev_stats_msg:find("read-more 轮数=0", 1, true) ~= nil
+    and dev_stats_msg:find("重试次数=0", 1, true) ~= nil
+    and dev_stats_msg:find("总耗时=", 1, true) ~= nil,
+  "全真模式 :messages 携带统计（题数 / read-more 轮数 / 重试次数 / 总耗时）"
+)
+check(dev_raw_msg ~= nil and dev_raw_msg:find("Pick?", 1, true) ~= nil, "全真模式 :messages 携带末轮原始 LLM JSON 响应全文")
+
+-- 7e) 全真 read-more：轮次与 stage 流照常展示，但重发的仍是同一份文件全文
+script = {
+  { status = "need_more" },
+  { status = "complete", questions = { { question = "Again?", options = { "a" }, multiple = false } } },
+}
+form_specs, stage_log, adapter_log = {}, {}, {}
+question_mod.ask_dev(dev_txt)
+check(
+  #stage_log == 3
+    and stage_log[1].stage == "capture"
+    and stage_log[2].stage == "extract"
+    and stage_log[3].stage == "read_more"
+    and stage_log[3].detail == "1/2",
+  "全真模式阶段流 capture → extract → read_more（detail 1/2）照常展示"
+)
+local dev_body1 = adapter_log[1] and adapter_log[1].user:match("<<<BEGIN>>>\n(.*)\n<<<END>>>")
+local dev_body2 = adapter_log[2] and adapter_log[2].user:match("<<<BEGIN>>>\n(.*)\n<<<END>>>")
+check(
+  #adapter_log == 2 and dev_body1 ~= nil and dev_body1 == dev_body2 and dev_body1:find("agent asks: pick one?", 1, true) ~= nil,
+  "read-more 轮重发同一份文件内容（行数翻倍对文件无意义）"
+)
+check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Again?", "全真 read-more 后 morph form 表单")
+
+-- 7f) 全真重试照常：失败 → retry 阶段（附原因）→ 成功出 form
+script = { "dev simulated failure", { status = "complete", questions = { { question = "R?", options = { "a" }, multiple = false } } } }
+form_specs, stage_log, adapter_log = {}, {}, {}
+question_mod.ask_dev(dev_txt)
+check(
+  #adapter_log == 2 and stage_log[3].stage == "retry" and stage_log[3].detail == "dev simulated failure",
+  "全真模式失败 → retry 阶段（detail 携带原因）"
+)
+check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "R?", "全真重试成功 morph form 表单")
+
+-- 7g) dev 提交：只打 info 日志（未投递）；假 exec 日志必须为空
+submitted = {}
+form_submit("yes\ndev note")
+check(#submitted == 0, "AIQuestionDev 提交绝不投递（无 send-text / send-keys / agent prompt）")
+local dev_submit_msg
+for _, m in ipairs(dev_notes) do
+  if m:find("提交文本（未投递）", 1, true) then
+    dev_submit_msg = m
+  end
+end
+check(
+  dev_submit_msg ~= nil and dev_submit_msg:find("yes", 1, true) ~= nil and dev_submit_msg:find("dev note", 1, true) ~= nil,
+  "提交打 info 日志（提交文本（未投递）+ 全文）"
+)
+vim.notify = dev_saved_notify
+
+-- 7h) 无参数 = 当前 buffer 判定：filetype json → fixture 路径
+vim.cmd("enew!")
+local dev_buf = vim.api.nvim_get_current_buf()
+vim.bo[dev_buf].filetype = "json"
+vim.api.nvim_buf_set_lines(dev_buf, 0, -1, false, { vim.json.encode({ status = "no_question" }) })
+form_specs, adapter_log, read_log = {}, {}, {}
+question_mod.ask_dev()
+check(
+  #form_specs == 1 and form_specs[1].mode == "fallback" and form_specs[1].raw_text:find("no_question", 1, true) ~= nil,
+  "无参数 + filetype json buffer → fixture 路径（no_question → fallback 原文）"
+)
+check(#adapter_log == 0 and #read_log == 0, "json buffer fixture 不调用 LLM / 终端")
+
+-- 7i) 无参数：buffer 名以 .json 结尾 → fixture 路径（有效 fixture → form）
+vim.fn.writefile({
+  vim.json.encode({
+    status = "complete",
+    questions = { { question = "Proceed?", options = { "yes", "no" }, multiple = false, suggested = { 1 } } },
+  }),
+}, dev_fix)
+vim.cmd("edit " .. vim.fn.fnameescape(dev_fix))
+form_specs, adapter_log = {}, {}
+question_mod.ask_dev()
+check(
+  #form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Proceed?",
+  "无参数 + buffer 名 .json 结尾 → fixture 路径（morph form）"
+)
+
+-- 7j) 无参数 + 非 json buffer = 全真：buffer 全部行 join 作为捕获文本
+vim.cmd("enew!")
+dev_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(dev_buf, 0, -1, false, { "buffer asks:", "[1] yes [2] no" })
+script = { { status = "complete", questions = { { question = "Buf?", options = { "y" }, multiple = false } } } }
+adapter_log, form_specs = {}, {}
+question_mod.ask_dev()
+check(
+  #adapter_log == 1
+    and adapter_log[1].user:find("buffer asks:", 1, true) ~= nil
+    and adapter_log[1].user:find("[1] yes [2] no", 1, true) ~= nil,
+  "无参数 + 非 json buffer → buffer 全文（逐行 join）作为捕获文本"
+)
+check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Buf?", "无参数 buffer 全真管线 → form 表单")
+vim.cmd("enew!")
+
+-- 还原本节注入与配置
+llm.set_adapter(nil)
+utils.set_exec(nil)
+utils.set_exec_to_file(nil)
+utils.set_exec_async(nil)
+package.preload["herder-agents.ui.question_form"] = nil
+delivery._reset()
+cfg.options.tools.qatool = nil
+cfg.options.tool_order = vim.tbl_filter(function(n)
+  return n ~= "qatool"
+end, cfg.options.tool_order)
+vim.g.ai_tool = qa_saved_tool
+cfg.options.llm = qa_saved_llm
+if qa_saved_key then
+  vim.env.DEEPSEEK_API_KEY = qa_saved_key
+else
+  vim.env.DEEPSEEK_API_KEY = nil
+end
+end
+run_question_tests() -- 提问表单用例块装进函数：局部变量作用域随函数收束，避开 main chunk 200 上限
+
 print("ALL PASSED")

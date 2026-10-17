@@ -222,6 +222,26 @@ M.defaults = {
     agent_wait_chunk_ms = 2000, -- agent wait 分段超时（服务端等待的轮询粒度）
   },
 
+  -- agent 提问表单（:AIQuestion）的 LLM 提取（llm.lua / question.lua，ADR-0002）：
+  -- 捕获 agent 终端 → OpenAI 兼容端点提取标准问题 JSON → 表单作答（文本通道送回）
+  llm = {
+    enabled = true, -- false 时 :AIQuestion 跳过提取，直接开 fallback 表单
+    base_url = "https://api.deepseek.com",
+    api_key_env = "DEEPSEEK_API_KEY",
+    model = "deepseek-chat",
+    timeout_ms = 30000,
+    temperature = 0,
+    start_lines = 80, -- 首次捕获的终端行数（need_more 时翻倍重读）
+    max_read_more = 2, -- read-more loop 轮数上限（need_more → 翻倍重读重提）
+    retries = 1, -- 无效 JSON / HTTP 失败的重试次数（重试附上次失败原因）
+    hint = true, -- agent blocked 时提醒 :AIQuestion（订阅 AIAgentBlocked 事件）
+    adapter = nil, -- 自定义提取通道：fun(opts, cb)，opts 见 llm.lua（测试注入 / 社区 adapter）
+  },
+
+  -- agent 提问表单弹窗尺寸（ui/question_form.lua 读取）：固定高度 = 编辑器行数 ×
+  -- height_ratio（全形态同高，morph 零跳变）；缺失时 UI 自带 0.6 缺省
+  question_form = { height_ratio = 0.6 },
+
   -- 发送给 agent 的选区上下文上限（借鉴 codex.nvim：超限拒绝而非静默截断）
   context = {
     max_lines = 500,
@@ -243,6 +263,8 @@ M.defaults = {
     switch = "AISwitch",
     drop_queue = "AIDropQueue",
     shrink_toggle = "HerdrShrinkToggle",
+    question = "AIQuestion", -- agent 提问表单（捕获 → LLM 提取 → 表单作答）
+    question_dev = "AIQuestionDev", -- 开发：本地文件 / 当前 buffer 驱动提问表单（提交不投递；弹窗测试 / 提示词调优）
   },
 
   -- 快捷键：默认【不绑定任何快捷键】，由用户显式传入才注册。每项独立配置完整
@@ -267,6 +289,7 @@ M.defaults = {
     -- notes_view = "<leader>hr", -- Notes 审阅/提交弹窗（<CR> 发送 / <C-a> 追加不回车）
     -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
     -- model = "<leader>hm", -- 切换模型（models 配置驱动重启 / model_switch 兜底）
+    -- question = "<leader>hq", -- agent 提问表单：捕获 → LLM 提取 → 表单作答（:AIQuestion 同效）
     -- shrink_toggle = "<leader>h<", -- 宽度 toggle：nvim 与 agent 分界在 toggle_ratio 与默认分屏比例（split.ratio）间切换
   },
 }
