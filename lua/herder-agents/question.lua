@@ -2,7 +2,7 @@
 --   :AIQuestion → panes.lookup 解析当前 tool 的 pane 目标（复用既有三级匹配）
 --   → `herdr agent read <pane> --lines N --format text` 捕获终端输出
 --   → llm.ask 提取标准问题 JSON（status + questions[] 多问题；每题
---     question/desc/options/multiple/suggested，extraction schema v2）
+--     label/question/desc/options/multiple/suggested，extraction schema v2）
 --   → 全程 open_loading 骨架承载阶段流（"capture" / "extract" / "read_more" / "retry"），
 --     完成后原位 morph_to 出表单（form / fallback 两态；esc 取消后句柄 QQC，
 --     迟到的 llm 回调一律静默丢弃 —— 不 morph_to、不 warn）
@@ -31,11 +31,15 @@ end
 -- 提取 system prompt（extraction schema v2：多问题）；fail_note 非空时附上次失败原因（重试轮）
 local function system_prompt(fail_note)
   local lines = {
-    "You convert a CLI coding agent's terminal output into structured questions for the user.",
+    "You convert terminal output into structured questions for the user.",
+    "This is a fast, purely mechanical FORMAT CONVERSION: do NOT analyze,",
+    "summarize, translate, correct, or reorder the content — every field is",
+    "excerpt text moved verbatim (at most split across question/desc/options);",
+    "when in doubt, copy exactly as written.",
     "Respond with ONLY one JSON object:",
     '{ "status": "complete" | "need_more" | "no_question",',
-    '  "questions": [ { "question": string, "desc": string, "options": string[],',
-    '    "multiple": boolean, "suggested": number[] }, ... ],',
+    '  "questions": [ { "label": string, "question": string, "desc": string,',
+    '    "options": string[], "multiple": boolean, "suggested": number[] }, ... ],',
     '  "reason": string }',
     "Rules:",
     '- status "complete": the excerpt contains one or more questions addressed to the user;',
@@ -43,8 +47,8 @@ local function system_prompt(fail_note)
     "  question = the question text copied verbatim, character-for-character —",
     "  never remove, rewrite, or renumber anything (a question starting with",
     '  "Q2 - ..." keeps that exact prefix), BUT it must NOT contain the option',
-    "  texts: when options are enumerated inline in the excerpt (\"(a) ...",
-    '  (b) ...\", "1) ... 2) ..."), move those texts into the options array',
+    '  texts: when options are enumerated inline in the excerpt ("(a) ...',
+    '  (b) ...", "1) ... 2) ..."), move those texts into the options array',
     "  instead of duplicating them inside question;",
     "  options = the selectable answers copied verbatim (>= 1), never altered —",
     '  KEEP each option\'s original label prefix exactly as written ("(a)",',
@@ -54,10 +58,14 @@ local function system_prompt(fail_note)
     "  — keep it as-is, the form renders markdown;",
     "  multiple = whether several options may be selected; suggested = 1-based",
     "  indexes of recommended options (empty array when none).",
-    "  desc = explanatory or supplementary text appearing right after the",
-    '  question in the excerpt (background, attached lines like "➡️ 推荐 (a):',
-    '  ..."), copied verbatim, MAY use markdown, and must NOT contain the',
-    '  option texts; use "" when the excerpt has none.',
+    "  desc = ONLY the recommendation note attached to the question (lines",
+    '  like "➡️ 推荐 (a): ..." or "Recommended: ..."): copied verbatim, MAY',
+    "  use markdown, and NEVER contains option content (options live only in",
+    '  the options array; a label mention like "(a)" inside the note stays',
+    '  as-is); use "" when the excerpt has no recommendation note.',
+    "  label = the question's own number in the excerpt, copied verbatim (\"Q2\",",
+    '  "3", "问题三" ...); use "" when the question carries no number — label is',
+    "  reply metadata only, never invent it and never move it into question;",
     "  Never invent questions or options.",
     '- status "need_more": a question may exist but the excerpt is truncated or too short;',
     "  more terminal history is needed.",
@@ -72,7 +80,8 @@ end
 -- 提取结果校验（schema v2，多问题）：
 --   complete：questions 必须为非空数组；每题 question 非空 string、options >= 1 且全为
 --            string、multiple 为 boolean、suggested（可选）索引对该题 options 均为合法
---            1-based、desc（可选）为 string（缺失/nil 归一 ""，非 string 视为无效）
+--            1-based、desc（可选）为 string（缺失/nil 归一 ""，非 string 视为无效）、
+--            label（可选）为 string（缺失/nil 归一 ""，非 string 视为无效）
 --            —— 任一题不满足 → 整个响应视为无效（nil + 原因，走重试/兜底链）
 --   questions 为空数组或缺失：视为 no_question（直接 fallback，不重试）
 --   need_more / no_question：只要求 status 字段本身
@@ -118,6 +127,13 @@ local function validate(obj)
       end
       desc = q.desc
     end
+    local label = ""
+    if q.label ~= nil then
+      if type(q.label) ~= "string" then
+        return nil, "questions[" .. qi .. "] label 必须是 string"
+      end
+      label = q.label
+    end
     local suggested = {}
     if q.suggested ~= nil then
       if type(q.suggested) ~= "table" then
@@ -133,6 +149,7 @@ local function validate(obj)
     table.insert(questions, {
       question = q.question,
       desc = desc,
+      label = label,
       options = options,
       multiple = q.multiple,
       suggested = suggested,

@@ -2718,6 +2718,8 @@ check(
     and qsys:find("must NOT contain the option", 1, true) ~= nil
     and qsys:find("MAY use markdown syntax", 1, true) ~= nil
     and qsys:find("KEEP each option's original label prefix", 1, true) ~= nil
+    and qsys:find("purely mechanical FORMAT CONVERSION", 1, true) ~= nil
+    and qsys:find("do NOT analyze", 1, true) ~= nil
     and qsys:find("strip", 1, true) == nil
     and qsys:find("the form numbers questions", 1, true) == nil,
   "system_prompt 逐字语义 + question 不含选项文本 + 保留 markdown 修饰"
@@ -2792,8 +2794,8 @@ question_mod.ask()
 local dsys = adapter_log[1] and adapter_log[1].system or ""
 check(
   dsys:find('"desc": string', 1, true) ~= nil
-    and dsys:find("explanatory", 1, true) ~= nil
-    and dsys:find("must NOT contain the", 1, true) ~= nil
+    and dsys:find("ONLY the recommendation note", 1, true) ~= nil
+    and dsys:find("NEVER contains option content", 1, true) ~= nil
     and dsys:find('use "" when', 1, true) ~= nil
     and dsys:find("Never invent questions or options", 1, true) ~= nil,
   "system_prompt 携带 desc schema 行与规则措辞（说明文本/不含选项文本/缺省空串）"
@@ -2826,6 +2828,65 @@ check(
     and form_specs[1].mode == "form"
     and form_specs[1].questions[1].desc == "",
   "desc 无效重试成功 → form 表单（重试轮缺省 desc 归一空串）"
+)
+
+-- 1e) label 字段（原始标号元数据）：system_prompt 携带 schema 行与规则措辞
+--（按原样复制标号 / 无标号归 ""）；validate 逐字携带 / 缺省归一 ""；
+-- morph spec 每题携带 label（显示层不渲染，仅提交块头/拦截提示/输入标题用）
+script = {
+  {
+    status = "complete",
+    questions = {
+      {
+        label = "Q2",
+        question = "Deploy how?",
+        options = { "Docker", "bare metal" },
+        multiple = false,
+        suggested = { 1 },
+      },
+      { question = "No label here?", options = { "yes", "no" }, multiple = true, suggested = {} },
+    },
+  },
+}
+form_specs = {}
+adapter_log = {}
+question_mod.ask()
+local lsys = adapter_log[1] and adapter_log[1].system or ""
+check(
+  lsys:find('"label": string', 1, true) ~= nil
+    and lsys:find("the question's own number in the excerpt", 1, true) ~= nil
+    and lsys:find('use "" when the question carries no number', 1, true) ~= nil
+    and lsys:find("Never invent questions or options", 1, true) ~= nil,
+  "system_prompt 携带 label schema 行与规则措辞（原样复制标号/无标号归空串）"
+)
+check(
+  #form_specs == 1
+    and form_specs[1].mode == "form"
+    and form_specs[1].questions[1].label == "Q2",
+  "morph spec 第 1 题逐字携带 label（validate 携带 → spec 自动携带）"
+)
+check(
+  form_specs[1].questions[2].label == "",
+  "morph spec 缺省 label 归一为空串（validate 缺省携带）"
+)
+
+-- 1f) label 非 string → 整体无效 → 重试路径（失败原因附 label 措辞），重试成功出 form
+script = {
+  { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = false, label = 42 } } },
+  { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = false } } },
+}
+form_specs = {}
+adapter_log = {}
+question_mod.ask()
+check(
+  #adapter_log == 2 and adapter_log[2].system:find("label 必须是 string", 1, true) ~= nil,
+  "label 非 string → 整体无效并重试（失败原因附 questions[k] label 必须是 string）"
+)
+check(
+  form_specs[1] ~= nil
+    and form_specs[1].mode == "form"
+    and form_specs[1].questions[1].label == "",
+  "label 无效重试成功 → form 表单（重试轮缺省 label 归一空串）"
 )
 
 -- 2) 无效 JSON 重试 1 次后成功（重试 system 附上次失败原因；不重读终端）

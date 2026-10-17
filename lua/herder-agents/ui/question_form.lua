@@ -3,9 +3,10 @@
 --
 -- 模块契约（签名不可偏离）：
 --   M.open(spec, on_submit) → handle
---     spec = { mode="form", questions = { { question=string, desc=string,
---              options={string,...}, multiple=boolean,
---              suggested={1-based int,...} }, ... } }  -- 1..N 题（desc 说明行，可选）
+--     spec = { mode="form", questions = { { label=string, question=string,
+--              desc=string, options={string,...}, multiple=boolean,
+--              suggested={1-based int,...} }, ... } }  -- 1..N 题（label = 该题在
+--              终端原文里的原始标号元数据，可选；desc 说明行，可选）
 --          | { mode="form", question=…, options=…, multiple=…, suggested=… } -- 旧扁平
 --            单题 spec 仍被接受（等价 questions={一条}，过渡期老调用方不受影响）
 --          | { mode="fallback", raw_text=string }
@@ -34,8 +35,9 @@
 --   M.compose_questions(questions, answers, customs) → string
 --     纯函数：answers[k]/customs[k] 为第 k 题的选中索引数组/自定义文本；
 --     N=1 输出与 M.compose(q1.options, answers[1], customs[1]) 完全一致（原文
---     逐行 + 自定义行，无前缀）；N>1 每题一块：`Qk:` 标号行 + 选中项原文逐行 +
---     非空自定义行，块间空行，无尾随空行
+--     逐行 + 自定义行，无前缀——该题带 label 也不例外）；N>1 每题一块：块头 =
+--     （该题 label 非空用原始标号，否则回退数组位置 `Qk`）.. ":"，其后选中项
+--     原文逐行 + 非空自定义行，块间空行，无尾随空行
 --
 -- 固定几何（高度与宽度都会话期一次定死，loading/form/fallback/多题全程一致，
 -- morph 只重渲染行、不调任何几何）：
@@ -47,7 +49,7 @@
 --   选项/原文/图例一律折行进固定宽度，宽度不再由内容反推——loading→form 变身
 --   前后宽度逐像素恒等，零跳变。
 --
--- 多问题分节视觉：每题一节（题干 + desc 说明行 + 选项 + ✎ 自定义行；desc 仅
+-- 多问题分节视觉：每题一节（题干 + 选项 + desc 说明行 + ✎ 自定义行；desc 仅
 -- 展示、Comment 压暗、绝不进入提交文本，为空时不产生任何额外行），节间一条
 -- `---` 分割
 -- 线（markdown 主题断行，叠 extmark 保证可见；N=1 无分割线）。原始内容是唯一
@@ -62,15 +64,15 @@
 -- 多选 checkbox 增删；只作用于光标所在题）；suggested 各题预选（单选取第一个、
 -- 多选全取，越界忽略）、初始光标落第一题建议项；每题末尾「✎ 自定义答案…」伪
 -- 选项行（后跟已填文本截断预览），其上 space/tab → 底部输入区按题重绑定（标题
--- 显示「自定义答案 · 第 k 题」，N=1 纯「自定义答案」），tab 从输入区返回该题
--- 选项区，各题自定义互不干扰；<Tab> 选项区/输入行移动焦点；<C-Enter> 任意焦点
--- 提交；<Esc>/q 取消；fallback = 只读 raw_text + 单一自定义输入行（不按题），
--- 提交仅自定义文本。
+-- 显示「自定义答案 · <label 或 第 k 题>」，N=1 纯「自定义答案」），tab 从输入区
+-- 返回该题选项区，各题自定义互不干扰；<Tab> 选项区/输入行移动焦点；<C-Enter>
+-- 任意焦点提交；<Esc>/q 取消；fallback = 只读 raw_text + 单一自定义输入行（不按
+-- 题），提交仅自定义文本。
 --
 -- 空提交策略（严格未答拦截）：<C-Enter> 时任一题「0 选中且自定义空」→ 提示
--- 「未作答（第 k 题）：<题干预览>」（首个未答题；没有可见标号后光报序号对不上
--- 内容，题干预览帮定位）、光标跳至该题首个选项、弹窗保留不提交（防误触把空
--- 答案发给 agent，与 Chat 空草稿拦截一致）。
+-- 「未作答（<label 或 第 k 题>）：<题干预览>」（首个未答题；原始标号与 agent
+-- 终端对得上，无标号回退位置序号；题干预览帮定位）、光标跳至该题首个选项、
+-- 弹窗保留不提交（防误触把空答案发给 agent，与 Chat 空草稿拦截一致）。
 --
 -- 重复防护：沿用 current_close 惯例——open/open_loading/morph 后的弹窗同属一个
 -- 会话，重复 open/open_loading 时旧弹窗（含 loading 骨架）让位关闭且不回调。
@@ -166,9 +168,9 @@ function M.compose(options, selected, custom)
 end
 
 -- 组装多题提交文本（纯函数）：
---   N=1 与 M.compose(q1.options, answers[1], customs[1]) 完全一致（无前缀）；
---   N>1 每题一块 `Qk:` 标号行 + 选中项原文逐行 + 非空自定义行，块间空行，
---   无尾随空行
+--   N=1 与 M.compose(q1.options, answers[1], customs[1]) 完全一致（无前缀，
+--   带 label 也不例外）；N>1 每题一块：块头 =（label 非空用原始标号，否则回退
+--   数组位置 "Qk"）.. ":" + 选中项原文逐行 + 非空自定义行，块间空行，无尾随空行
 function M.compose_questions(questions, answers, customs)
   local qs = {}
   for _, q in ipairs(questions or {}) do
@@ -183,7 +185,8 @@ function M.compose_questions(questions, answers, customs)
   local blocks = {}
   for k, q in ipairs(qs) do
     local body = M.compose(q.options, answers and answers[k] or {}, customs and customs[k] or nil)
-    blocks[#blocks + 1] = body == "" and ("Q" .. k .. ":") or ("Q" .. k .. ":\n" .. body)
+    local head = (type(q.label) == "string" and q.label ~= "") and q.label or ("Q" .. k)
+    blocks[#blocks + 1] = body == "" and (head .. ":") or (head .. ":\n" .. body)
   end
   return table.concat(blocks, "\n\n")
 end
@@ -239,12 +242,15 @@ end
 -- 单题 spec 归一化：question/options 字符串化、suggested 越界过滤（保持传入顺序，
 -- radio 初始选中取第一个有效建议）；question 原样保留（原始内容是唯一事实源，
 -- 内容以 `Q2 - …` 开头就照显示，不做任何前缀剥离/改写；options 同样逐字不动）；
--- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示
+-- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示；
+-- label 仅 tostring 归一（缺省 ""）——原始标号元数据，不渲染成行，只驱动提交
+-- 块头 / 未答拦截提示 / 输入行标题
 local function normalize_question(q)
   q = type(q) == "table" and q or {}
   local item = {
     question = tostring(q.question or ""),
     desc = tostring(q.desc or ""),
+    label = tostring(q.label or ""),
     options = {},
     multiple = q.multiple == true,
     suggested = {},
@@ -339,8 +345,8 @@ local function start_ui(initial)
     return (customs[k] or "") ~= ""
   end
 
-  -- 未答拦截提示的题干预览：题干前 ~30 显示宽字符，超出截断加 …（表单不再
-  -- 自加 Qk 标号行，光报序号对不上内容，预览帮定位）
+  -- 未答拦截提示的题干预览：题干前 ~30 显示宽字符，超出截断加 …（拦截点名用
+  -- 原始标号 label、无标号回退位置序号；题干预览帮定位）
   local function stem_preview(text)
     local s = tostring(text or "")
     if dw(s) > 30 then
@@ -376,11 +382,13 @@ local function start_ui(initial)
     return " Agent 提问 · 单选 "
   end
 
-  -- 输入行标题：多题显示当前绑定题（位置表述「第 k 题」，不是 Q 前缀），
+  -- 输入行标题：多题显示当前绑定题（原始标号 label 优先，无则位置「第 k 题」），
   -- 单题/fallback 纯「自定义答案」
   local function input_title_text()
     if is_form and nq > 1 then
-      return string.format(" 自定义答案 · 第 %d 题 ", input_q)
+      local q = questions[input_q]
+      local name = q and q.label ~= "" and q.label or ("第 " .. input_q .. " 题")
+      return string.format(" 自定义答案 · %s ", name)
     end
     return " 自定义答案 "
   end
@@ -417,15 +425,6 @@ local function start_ui(initial)
             add(seg, {}, "header", k, nil)
           end
         end
-        -- desc 说明行（仅展示、不进提交文本）：紧跟题干折行之后、题干与选项间
-        -- 空行之前；Comment 压暗（与「· 建议」标记/图例同语系），折满 inner、
-        -- 续行平齐不缩进（与题干续行同策略）；不参与 space 选择（row_opt 为 nil）；
-        -- desc 为空 → 不产生任何额外行
-        if q.desc ~= "" then
-          for _, seg in ipairs(wrap_dw(q.desc, inner)) do
-            add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
-          end
-        end
         add("", {}, "blank", k, nil) -- 题干与选项间空一行（防 setext、版式呼吸）
         local opt_w = math.max(4, inner - 4) -- 扣除字形/续行缩进 4 列
         for i, o in ipairs(q.options) do
@@ -460,6 +459,15 @@ local function start_ui(initial)
               marks[#marks + 1] = { off + mrange[1], off + mrange[2], "Comment" }
             end
             add(text, marks, "option", k, i)
+          end
+        end
+        -- desc 说明行（仅展示、不进提交文本）：渲染在选项之后、✎ 行之前；
+        -- Comment 压暗（与「· 建议」标记/图例同语系），折满 inner、续行平齐
+        -- 不缩进（与题干续行同策略）；不参与 space 选择（row_opt 为 nil）；
+        -- desc 为空 → 不产生任何额外行
+        if q.desc ~= "" then
+          for _, seg in ipairs(wrap_dw(q.desc, inner)) do
+            add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
           end
         end
         -- ✎ 自定义答案伪选项行（预览截断到内宽；已填时预览亮 String 色）
@@ -925,8 +933,8 @@ local function start_ui(initial)
   end
 
   -- <C-Enter> 提交：任意焦点可用；严格未答拦截——第一个「0 选中且自定义空」的
-  -- 题被点名（未作答（第 k 题）：<题干预览>）后弹窗保留，光标跳至该题首个选项
-  -- （选项区有焦点时）
+  -- 题被点名（未作答（<label 或 第 k 题>）：<题干预览>）后弹窗保留，光标跳至
+  -- 该题首个选项（选项区有焦点时）
   local function submit()
     if closed or submitted then
       return
@@ -941,7 +949,8 @@ local function start_ui(initial)
       end
       for k = 1, nq do
         if not question_answered(k) then
-          utils.warn(string.format("未作答（第 %d 题）：%s", k, stem_preview(questions[k].question)))
+          local name = questions[k].label ~= "" and questions[k].label or ("第 " .. k .. " 题")
+          utils.warn(string.format("未作答（%s）：%s", name, stem_preview(questions[k].question)))
           if focus == "options" and top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
             local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_pen_row[k] or q_first_row[k] or 1
             pcall(vim.api.nvim_set_current_win, top_popup.winid)
