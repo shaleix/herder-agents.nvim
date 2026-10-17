@@ -3,6 +3,9 @@
 -- Lua API；`llm` CLI 是 Python 外部依赖），内置默认为 OpenAI 兼容 HTTP
 --（DeepSeek 开箱，DEEPSEEK_API_KEY）：
 --   POST {base_url}/chat/completions，body 含 response_format = { type = "json_object" }
+-- 请求定制（语义仿 neogit ai_commit）：llm.disable_thinking 按 base_url 厂商预设
+-- 注入关思考字段；llm.extra_body 最后 force 深合并（覆盖一切内置字段，用户赢）；
+-- llm.extra_headers 追加自定义 HTTP 头。
 -- 经 utils.exec_async_to_file 包 sh -c curl（Authorization header、-m 超时、
 -- 输出走临时文件 —— 与 skills api 同一惯例：CLI 大响应经管道偶发截断，文件
 -- 重定向同步写始终完整，且超时 SIGKILL 命中真实进程、回调准时）。
@@ -22,6 +25,7 @@ local config = require("herder-agents.config")
 local utils = require("herder-agents.utils")
 
 local injected_adapter = nil -- 测试 / 运行期注入（优先于 config.llm.adapter）
+local unknown_thinking_warned = false -- disable_thinking 遇未知端点的警告（每会话只一次）
 
 --- 测试注入：覆盖 LLM adapter（传 nil 恢复内置实现）
 function M.set_adapter(fn)
@@ -47,6 +51,29 @@ function M.api_key_error()
   return nil
 end
 
+-- 关思考请求字段的厂商预设（仿 neogit ai.no_thinking_body）：base_url 明文
+-- needle 依序匹配；未知端点返回 nil —— 盲注外来字段会让严格 API（OpenAI、
+-- DashScope 等）整单 400，此时应改用 extra_body 显式配置
+local function no_thinking_body(base_url)
+  if base_url:find(":11434", 1, true) then -- ollama
+    return { think = false }
+  end
+  if base_url:find("dashscope.aliyuncs.com", 1, true) then
+    return { enable_thinking = false }
+  end
+  if base_url:find("api.deepseek.com", 1, true) then
+    return { thinking = { type = "disabled" } }
+  end
+  if base_url:find("openrouter.ai", 1, true) then
+    return { reasoning = { enabled = false } }
+  end
+  if base_url:find("api.openai.com", 1, true) then
+    -- OpenAI 推理模型无法彻底关思考；"minimal" 是最快的受支持档位
+    return { reasoning_effort = "minimal" }
+  end
+  return nil
+end
+
 -- 内置 OpenAI 兼容实现（见文件头）
 local function builtin_ask(opts, cb)
   local key_err = M.api_key_error()
@@ -58,7 +85,9 @@ local function builtin_ask(opts, cb)
   local env_name = cfg.api_key_env or "DEEPSEEK_API_KEY"
   local base_url = (cfg.base_url or "https://api.deepseek.com"):gsub("/+$", "")
   local timeout_ms = opts.timeout_ms or cfg.timeout_ms or 30000
-  local body = vim.json.encode({
+  -- body 合并次序：基础字段 → disable_thinking 厂商预设 → extra_body
+  -- （force 深合并；extra_body 最后合并、覆盖一切内置字段，用户赢）
+  local body = {
     model = cfg.model or "deepseek-chat",
     temperature = cfg.temperature or 0,
     response_format = { type = "json_object" },
@@ -66,7 +95,22 @@ local function builtin_ask(opts, cb)
       { role = "system", content = opts.system },
       { role = "user", content = opts.user },
     },
-  })
+  }
+  if cfg.disable_thinking then
+    local preset = no_thinking_body(base_url)
+    if preset then
+      body = vim.tbl_deep_extend("force", body, preset)
+    elseif not unknown_thinking_warned then
+      unknown_thinking_warned = true
+      utils.warn(
+        "herder-agents: llm.disable_thinking 已开启但端点厂商未知，未注入关思考字段"
+          .. " —— 请改用 llm.extra_body 显式配置"
+      )
+    end
+  end
+  if type(cfg.extra_body) == "table" then
+    body = vim.tbl_deep_extend("force", body, cfg.extra_body)
+  end
   local argv = {
     "curl",
     "-sS",
@@ -77,12 +121,19 @@ local function builtin_ask(opts, cb)
     "Authorization: Bearer " .. vim.env[env_name],
     "-H",
     "Content-Type: application/json",
-    "-d",
-    body,
-    -- curl 自身的应用层超时（秒，向上取整）；exec_async_to_file 另有 SIGKILL 兜底
-    "-m",
-    tostring(math.max(1, math.ceil(timeout_ms / 1000))),
   }
+  -- extra_headers：追加自定义 HTTP 头（空表 / 非 table 安全跳过）
+  if type(cfg.extra_headers) == "table" then
+    for k, v in pairs(cfg.extra_headers) do
+      argv[#argv + 1] = "-H"
+      argv[#argv + 1] = k .. ": " .. tostring(v)
+    end
+  end
+  argv[#argv + 1] = "-d"
+  argv[#argv + 1] = vim.json.encode(body)
+  -- curl 自身的应用层超时（秒，向上取整）；exec_async_to_file 另有 SIGKILL 兜底
+  argv[#argv + 1] = "-m"
+  argv[#argv + 1] = tostring(math.max(1, math.ceil(timeout_ms / 1000)))
   utils.exec_async_to_file(argv, function(r)
     if r.code ~= 0 then
       cb(nil, ("curl 失败（exit %d）%s"):format(r.code, r.stderr ~= "" and ": " .. r.stderr or ""))

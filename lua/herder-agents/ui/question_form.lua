@@ -3,8 +3,9 @@
 --
 -- 模块契约（签名不可偏离）：
 --   M.open(spec, on_submit) → handle
---     spec = { mode="form", questions = { { question=string, options={string,...},
---              multiple=boolean, suggested={1-based int,...} }, ... } }  -- 1..N 题
+--     spec = { mode="form", questions = { { question=string, desc=string,
+--              options={string,...}, multiple=boolean,
+--              suggested={1-based int,...} }, ... } }  -- 1..N 题（desc 说明行，可选）
 --          | { mode="form", question=…, options=…, multiple=…, suggested=… } -- 旧扁平
 --            单题 spec 仍被接受（等价 questions={一条}，过渡期老调用方不受影响）
 --          | { mode="fallback", raw_text=string }
@@ -13,16 +14,17 @@
 --     恒 no-op），既有调用方可继续忽略返回值
 --   M.open_loading() → handle
 --     立即弹出与表单同布局的 loading 骨架：标题「Agent 提问 · 提取中…」，内容
---     （spinner 帧动画 + 阶段感知文案）在固定高度内垂直居中；输入行只读压暗；
+--     （spinner 帧动画 + 阶段感知文案）在固定高度内垂直居中，主行与附注行再
+--     按 inner 宽逐行水平居中（合成一个视觉块整体居中）；输入行只读压暗；
 --     loading 态仅 <Esc> 可取消。
 --       handle.set_stage(stage, detail?)
 --         stage ∈ "capture"|"extract"|"read_more"|"retry"，detail 如 "1/2"（追读
 --         轮次）或上次失败原因（retry 附注，可选）；文案：捕获终端…/LLM 提取
 --         中…/追读第 N/M 轮…/重试…
 --       handle.morph_to(spec, on_submit) -- 参数与 M.open 完全同构；在 loading 或
---         旧表单上「原位变身」：复用同一 Layout 对象（仅重设宽度、重渲染行、重绑
---         键位，不卸载重挂，dim 遮罩不闪，高度全程不变）；句柄已关闭则 no-op；
---         变身后句柄委托当前表单的 close/closed 语义
+--         旧表单上「原位变身」：复用同一 Layout 对象（仅重渲染行、重绑键位，
+--         不卸载重挂、不调几何——宽度与高度全程恒等，dim 遮罩不闪）；句柄已
+--         关闭则 no-op；变身后句柄委托当前表单的 close/closed 语义
 --       handle.close() -- 幂等关闭（<Esc> 同源）；绝不触发任何回调
 --       handle.closed / handle.is_closed() -- 管线判断迟到结果丢弃用
 --     组件侧对迟到结果零回调：closed 后 set_stage/morph_to 均为 no-op
@@ -35,29 +37,40 @@
 --     逐行 + 自定义行，无前缀）；N>1 每题一块：`Qk:` 标号行 + 选中项原文逐行 +
 --     非空自定义行，块间空行，无尾随空行
 --
--- 固定高度（全程 loading/form/fallback/多题一致，morph 不改高度）：
+-- 固定几何（高度与宽度都会话期一次定死，loading/form/fallback/多题全程一致，
+-- morph 只重渲染行、不调任何几何）：
 --   弹窗总高 = 编辑器行数 × config.options.question_form.height_ratio（缺省回退
 --   0.6，config 未就绪/字段缺失均可安全降级）；内容不足留白（loading 垂直居中），
 --   超出靠 j/k/G 滚动。
+--   弹窗宽度 = clamp_popup_width(编辑器列数 × width_ratio)（缺省回退 0.7）再
+--   收敛到 [56, 88]（下限保持既有最小体量，上限沿用「一屏内聚焦」）；题头/
+--   选项/原文/图例一律折行进固定宽度，宽度不再由内容反推——loading→form 变身
+--   前后宽度逐像素恒等，零跳变。
 --
--- 多问题分节视觉：每题一节（题头 + 选项 + ✎ 自定义行），节间一条 `---` 分割线
--- （markdown 主题断行，叠 extmark 保证可见；N=1 无分割线）；N>1 题头带 `Qk  `
--- 标号（Directory 色），顶部标题体现「N 个问题（已答 a/N）」。题面上框 buffer
--- filetype=markdown + buftype=nofile：语法高亮生效，同时阻断 markview 等要求
--- buftype=="" 的 ft 插件 attach；续行缩进一律 ≤3 空格、分割线前留空行，避免
--- 4 空格缩进代码块 / setext 标题等 markdown 误判。
+-- 多问题分节视觉：每题一节（题干 + desc 说明行 + 选项 + ✎ 自定义行；desc 仅
+-- 展示、Comment 压暗、绝不进入提交文本，为空时不产生任何额外行），节间一条
+-- `---` 分割
+-- 线（markdown 主题断行，叠 extmark 保证可见；N=1 无分割线）。原始内容是唯一
+-- 事实源：题干逐字渲染（内容以 `Q2 - …` 开头就照显示），表单不自加任何 Qk
+-- 标号行，每节直接以题干开头；题干与选项间空行、节间空行 + 分割线 + 空行防
+-- setext；顶部标题体现「N 个问题（已答 a/N）」（计数不是前缀）。题面上框
+-- buffer filetype=markdown + buftype=nofile：语法高亮生效，
+-- 同时阻断 markview 等要求 buftype=="" 的 ft 插件 attach；续行缩进一律 ≤3
+-- 空格、分割线前留空行，避免 4 空格缩进代码块 / setext 标题等 markdown 误判。
 --
 -- 已确认交互（勿改）：<Space>/x 切换选项（单选 radio 恒一项、重复 space 不反选，
 -- 多选 checkbox 增删；只作用于光标所在题）；suggested 各题预选（单选取第一个、
 -- 多选全取，越界忽略）、初始光标落第一题建议项；每题末尾「✎ 自定义答案…」伪
 -- 选项行（后跟已填文本截断预览），其上 space/tab → 底部输入区按题重绑定（标题
--- 显示「自定义答案 · Qk」，N=1 不带 Qk），tab 从输入区返回该题选项区，各题自定义
--- 互不干扰；<Tab> 选项区/输入行移动焦点；<C-Enter> 任意焦点提交；<Esc>/q 取消；
--- fallback = 只读 raw_text + 单一自定义输入行（不按题），提交仅自定义文本。
+-- 显示「自定义答案 · 第 k 题」，N=1 纯「自定义答案」），tab 从输入区返回该题
+-- 选项区，各题自定义互不干扰；<Tab> 选项区/输入行移动焦点；<C-Enter> 任意焦点
+-- 提交；<Esc>/q 取消；fallback = 只读 raw_text + 单一自定义输入行（不按题），
+-- 提交仅自定义文本。
 --
 -- 空提交策略（严格未答拦截）：<C-Enter> 时任一题「0 选中且自定义空」→ 提示
--- 「Qk 未作答」（首个未答题号）、光标跳至该题首个选项、弹窗保留不提交（防误触
--- 把空答案发给 agent，与 Chat 空草稿拦截一致）。
+-- 「未作答（第 k 题）：<题干预览>」（首个未答题；没有可见标号后光报序号对不上
+-- 内容，题干预览帮定位）、光标跳至该题首个选项、弹窗保留不提交（防误触把空
+-- 答案发给 agent，与 Chat 空草稿拦截一致）。
 --
 -- 重复防护：沿用 current_close 惯例——open/open_loading/morph 后的弹窗同属一个
 -- 会话，重复 open/open_loading 时旧弹窗（含 loading 骨架）让位关闭且不回调。
@@ -75,7 +88,7 @@ local current_close = nil
 -- 选中/未选中沿用 Notes 勾选框的 String/LineNr 色系，保持插件内同一视觉语言
 local function ensure_highlights()
   local defs = {
-    HerderQFormQuestion = { bold = true }, -- ✎ 字形 / loading 文案 / 题头标号外的强调位
+    HerderQFormQuestion = { bold = true }, -- ✎ 字形 / loading 文案 / 强调位
     HerderQFormOn = { link = "String" }, -- 选中字形 / ✎ 预览 / spinner 帧
     HerderQFormOff = { link = "LineNr" }, -- 未选中字形 / 「自定义答案…」标签
     HerderQFormDivider = { link = "Comment" }, -- 节间 `---` 分割线
@@ -186,7 +199,8 @@ local PEN_LABEL = "自定义答案…"
 local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 local SPINNER_MS = 120 -- 帧间隔；10 帧 ≈ 1.2s 一轮
 local LOADING_MIN_ROWS = 3 -- loading 内容行数下限：空行 / spinner+文案 / 附注
-local LOADING_BASE_W = 56 -- 与表单最小宽一致：变身前后宽度跳变最小
+local MIN_W = 56 -- 弹窗宽度下限：保持既有最小体量（原 loading 骨架基宽）
+local MAX_W = 88 -- 弹窗宽度上限：沿用「一屏内聚焦」体量（原内容自适应上限）
 local STAGE_LABELS = {
   capture = "捕获终端…",
   extract = "LLM 提取中…",
@@ -194,6 +208,7 @@ local STAGE_LABELS = {
 local CHROME_ROWS = 6 -- 弹窗总高 → 上框内容行的换算：边框2 + 底衬1 + 输入行外框3
 
 local DEFAULT_HEIGHT_RATIO = 0.6
+local DEFAULT_WIDTH_RATIO = 0.7
 
 -- 固定高度比例：config.options.question_form.height_ratio（另一 lane 添加）；
 -- config 缺失/字段缺失/非法值一律安全回退 0.6
@@ -208,12 +223,28 @@ local function read_height_ratio()
   return DEFAULT_HEIGHT_RATIO
 end
 
+-- 固定宽度比例：config.options.question_form.width_ratio；与 read_height_ratio
+-- 同构的完整缺省回退链——config 缺失/字段缺失/非 number/≤0 一律安全回退 0.7
+local function read_width_ratio()
+  local ok, config = pcall(require, "herder-agents.config")
+  if ok and type(config) == "table" and type(config.options) == "table"
+    and type(config.options.question_form) == "table"
+    and type(config.options.question_form.width_ratio) == "number"
+    and config.options.question_form.width_ratio > 0 then
+    return config.options.question_form.width_ratio
+  end
+  return DEFAULT_WIDTH_RATIO
+end
+
 -- 单题 spec 归一化：question/options 字符串化、suggested 越界过滤（保持传入顺序，
--- radio 初始选中取第一个有效建议）
+-- radio 初始选中取第一个有效建议）；question 原样保留（原始内容是唯一事实源，
+-- 内容以 `Q2 - …` 开头就照显示，不做任何前缀剥离/改写；options 同样逐字不动）；
+-- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示
 local function normalize_question(q)
   q = type(q) == "table" and q or {}
   local item = {
     question = tostring(q.question or ""),
+    desc = tostring(q.desc or ""),
     options = {},
     multiple = q.multiple == true,
     suggested = {},
@@ -237,8 +268,8 @@ end
 
 -- 弹窗会话：一组常驻 Layout/Popup（top 题面区 + input 自定义答案行）贯穿
 -- loading → form/fallback（或 form → form）全生命周期。所有变身都在同一批
--- 窗口/缓冲上原位完成（nvim_win_set_config 改几何），不卸载重挂；高度在会话
--- 创建时一次定死（loading/form/fallback/多题全程一致，morph 只调宽度）。
+-- 窗口/缓冲上原位完成（不卸载重挂）；几何（宽度与高度）在会话创建时一次
+-- 定死（loading/form/fallback/多题全程一致，morph 只重渲染，不调几何）。
 -- initial = { loading = true } | { spec = spec, on_submit = fn }
 local function start_ui(initial)
   if current_close then
@@ -262,7 +293,17 @@ local function start_ui(initial)
   total_h = math.max(LOADING_MIN_ROWS + CHROME_ROWS, math.min(total_h, vim.o.lines - 1))
   local fixed_rows = total_h - CHROME_ROWS -- 上框内容行数（不足留白，超出滚动）
 
-  -- ── 会话状态（morph 时由 apply_spec 整体重算；fixed_rows 除外）──
+  -- ── 固定宽度：编辑器列数 × ratio，先 clamp 到屏宽 90% 再收敛 [MIN_W, MAX_W]。
+  -- 与高度同一哲学：会话期一次定死，loading/form/fallback/多题全程同宽（morph
+  -- 不再触碰几何）；宽度不随内容自适应——内容一律折行进该宽度，零宽度跳变 ──
+  local width = common.clamp_popup_width(math.floor(vim.o.columns * read_width_ratio()))
+  width = math.max(MIN_W, math.min(MAX_W, width))
+  -- 折行预算按实测留足：布局宽 W → 窗口内容区(含左右 padding)为 W-4，再扣
+  -- padding 2 列 → 文本安全宽度 = W-6（宁余勿溢出，避免最宽行右端被裁）
+  local inner = math.max(8, width - 6)
+
+  -- ── 会话状态（morph 时由 apply_spec 整体重算；几何 width/inner/fixed_rows
+  -- 会话期恒定，不在重算范围）──
   local mode = "loading" -- "loading" | "form" | "fallback"
   local is_form = true
   local questions = {} -- 归一化后的题目数组（1..nq）
@@ -270,7 +311,6 @@ local function start_ui(initial)
   local raw_text = ""
   local sel = {} -- sel[k] = { [选项索引] = true }
   local customs = {} -- customs[k] = 第 k 题自定义文本（trim 后）
-  local width, inner = LOADING_BASE_W, LOADING_BASE_W - 6
   local on_submit_cb = function() end
   local closed, submitted = false, false
   local focus = nil -- "options" | "input"（loading 态不适用）
@@ -285,7 +325,6 @@ local function start_ui(initial)
   local stage, stage_detail = "capture", nil
   local frame = 1
   local spinner_timer = nil
-  local loading_width = common.clamp_popup_width(LOADING_BASE_W)
 
   local function legend_for(form)
     return form and " space 选择 · tab 焦点 · ctrl+enter 提交 · esc 取消 "
@@ -298,6 +337,16 @@ local function start_ui(initial)
       return true
     end
     return (customs[k] or "") ~= ""
+  end
+
+  -- 未答拦截提示的题干预览：题干前 ~30 显示宽字符，超出截断加 …（表单不再
+  -- 自加 Qk 标号行，光报序号对不上内容，预览帮定位）
+  local function stem_preview(text)
+    local s = tostring(text or "")
+    if dw(s) > 30 then
+      return take_dw(s, 30) .. "…"
+    end
+    return s
   end
 
   local function title_text()
@@ -327,10 +376,11 @@ local function start_ui(initial)
     return " Agent 提问 · 单选 "
   end
 
-  -- 输入行标题：多题显示当前绑定题号，单题/fallback 不带 Qk
+  -- 输入行标题：多题显示当前绑定题（位置表述「第 k 题」，不是 Q 前缀），
+  -- 单题/fallback 纯「自定义答案」
   local function input_title_text()
     if is_form and nq > 1 then
-      return string.format(" 自定义答案 · Q%d ", input_q)
+      return string.format(" 自定义答案 · 第 %d 题 ", input_q)
     end
     return " 自定义答案 "
   end
@@ -343,9 +393,9 @@ local function start_ui(initial)
   end
 
   -- 行模型：每行 { text, marks = { {起始字节, 结束字节, hl组} }, kind, q, opt }。
-  -- 题面文本（题头/fallback 原文）不再整行压 extmark——filetype=markdown 的语法
+  -- 题面文本（题干/fallback 原文）不再整行压 extmark——filetype=markdown 的语法
   -- 高亮直接生效（代码块/加粗等与手工折行共存）；extmark 只用于结构性字形
-  -- （选项框/✎/分割线/Qk 标号）。
+  -- （选项框/✎/分割线）。
   local function build_rows()
     local rows = {}
     local function add(text, marks, kind, q, opt)
@@ -360,29 +410,23 @@ local function start_ui(initial)
           add("", {}, "blank", k, nil)
           add(string.rep("-", inner), { { 0, inner, "HerderQFormDivider" } }, "divider", k, nil)
         end
-        -- 题头：多题带 `Qk  ` 标号（Directory 色）；续行 3 空格（markdown 安全）
-        local label = nq > 1 and ("Q" .. k .. "  ") or nil
-        local segs = {}
+        -- 每节直接以题干开头（原始内容唯一事实源，逐字渲染、无自加标号行）；
+        -- 折满 inner、续行平齐不缩进
         if q.question ~= "" then
-          local budget = label and math.max(8, inner - dw(label)) or inner
-          for _, seg in ipairs(wrap_dw(q.question, budget)) do
-            segs[#segs + 1] = seg
-          end
-        elseif label then
-          segs[1] = "" -- 缺题干的多题节：仅渲染标号行
-        end
-        for si, seg in ipairs(segs) do
-          if si == 1 and label then
-            add(label .. seg, { { 0, #label, "Directory" } }, "header", k, nil)
-          elseif label then
-            add("   " .. seg, {}, "header", k, nil)
-          else
+          for _, seg in ipairs(wrap_dw(q.question, inner)) do
             add(seg, {}, "header", k, nil)
           end
         end
-        if #segs > 0 then
-          add("", {}, "blank", k, nil) -- 题头与选项间空一行（单题历史版式一致）
+        -- desc 说明行（仅展示、不进提交文本）：紧跟题干折行之后、题干与选项间
+        -- 空行之前；Comment 压暗（与「· 建议」标记/图例同语系），折满 inner、
+        -- 续行平齐不缩进（与题干续行同策略）；不参与 space 选择（row_opt 为 nil）；
+        -- desc 为空 → 不产生任何额外行
+        if q.desc ~= "" then
+          for _, seg in ipairs(wrap_dw(q.desc, inner)) do
+            add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
+          end
         end
+        add("", {}, "blank", k, nil) -- 题干与选项间空一行（防 setext、版式呼吸）
         local opt_w = math.max(4, inner - 4) -- 扣除字形/续行缩进 4 列
         for i, o in ipairs(q.options) do
           local osegs = wrap_dw(o, opt_w)
@@ -453,8 +497,9 @@ local function start_ui(initial)
     return rows
   end
 
-  -- spec 解析 + 宽度重算（open 直开与 morph 共用；必须在弹窗渲染前完成）。
-  -- 高度不在重算范围：全程固定，见 fixed_rows。
+  -- spec 解析 + 会话状态重算（open 直开与 morph 共用；必须在弹窗渲染前完成）。
+  -- 几何不在此重算：宽度/高度会话期一次定死（见上方固定几何块），内容一律
+  -- 折行进固定宽度——宽度不再由内容反推。
   local function apply_spec(spec, on_submit)
     spec = spec or {}
     on_submit_cb = on_submit or function() end
@@ -495,33 +540,6 @@ local function start_ui(initial)
       customs[k] = ""
     end
     focus = is_form and "options" or "input"
-
-    local legend = legend_for(is_form)
-    -- 宽度：按最长逻辑行估算（+4 为两侧边框与内边距），clamp 到屏幕可见宽 90%；
-    -- 上限 88 让弹窗保持"一屏内聚焦"的体量（与 Notes 90 收敛一致，略收窄）
-    local content_w = dw(legend) + 2
-    if is_form then
-      local label_w = nq > 1 and 6 or 0 -- `Q10  ` 标号预留
-      for _, q in ipairs(questions) do
-        content_w = math.max(content_w, dw(q.question) + label_w)
-        for i, o in ipairs(q.options) do
-          local w = 4 + dw(o)
-          if q.suggested_set[i] then
-            w = w + 2 + dw(MARKER)
-          end
-          content_w = math.max(content_w, w)
-        end
-      end
-      content_w = math.max(content_w, dw(PEN_GLYPH .. " " .. PEN_LABEL) + 2)
-    else
-      for _, line in ipairs(vim.split(raw_text:gsub("\r", ""), "\n", { plain = true })) do
-        content_w = math.max(content_w, dw(line))
-      end
-    end
-    width = common.clamp_popup_width(math.min(88, math.max(LOADING_BASE_W, content_w + 4)))
-    -- 折行预算按实测留足：布局宽 W → 窗口内容区(含左右 padding)为 W-4，再扣 padding 2 列
-    -- → 文本安全宽度 = W-6（宁余勿溢出，避免最宽行右端被裁）
-    inner = math.max(8, width - 6)
   end
 
   if not born_loading then
@@ -529,16 +547,15 @@ local function start_ui(initial)
     mode = is_form and "form" or "fallback"
   end
 
-  -- ── 常驻骨架：与表单同布局（top + input），loading 与 morph 共用；高度恒定 ──
+  -- ── 常驻骨架：与表单同布局（top + input），loading 与 morph 共用；几何恒定 ──
   local top_enter = born_loading or is_form -- form：初始聚焦选项区；fallback：聚焦输入行；loading：聚焦 loading 区
-  local top_w = born_loading and loading_width or width
 
   -- 与 Chat/Notes 同款视觉：空格边框 + 悬浮标题 + NormalFloat 系背景。
   -- filetype=markdown 让题面拿到真语法高亮；buftype=nofile 阻断 markview 等
   -- 要求 buftype=="" 的插件 attach；conceallevel=0 保证字形/分割线不被隐去
   local top_popup = Popup({
     position = "50%",
-    size = { width = top_w, height = fixed_rows },
+    size = { width = width, height = fixed_rows },
     enter = top_enter,
     border = {
       padding = { left = 1, right = 1, top = 0, bottom = 1 },
@@ -564,7 +581,7 @@ local function start_ui(initial)
 
   local input_popup = Popup({
     position = "50%",
-    size = { width = top_w, height = 1 },
+    size = { width = width, height = 1 },
     enter = (not born_loading) and not is_form,
     border = {
       padding = { left = 1, right = 1 },
@@ -584,12 +601,12 @@ local function start_ui(initial)
   })
 
   -- 上：题头+选项（grow 自适应，高度恒为 fixed_rows）；下：自定义答案输入行
-  --（外框高 3 = 内容 1 + 边框 2）。布局总高 fixed_rows + 6 全程不变。
+  --（外框高 3 = 内容 1 + 边框 2）。布局宽 width、总高 fixed_rows + 6 全程不变。
   local layout = Layout(
     {
       position = "50%",
       relative = "editor",
-      size = { width = top_w, height = total_h },
+      size = { width = width, height = total_h },
     },
     Layout.Box({
       Layout.Box(top_popup, { grow = 1 }),
@@ -723,8 +740,11 @@ local function start_ui(initial)
     sync_focus_titles()
   end
 
-  -- loading 区渲染（固定高度内垂直居中）：空行 / spinner+阶段文案 / 附注（截断到
-  -- 一行），上下以留白补齐 fixed_rows
+  -- loading 区渲染（固定高度内垂直居中 + 按 inner 宽水平居中）：空行 /
+  -- spinner+阶段文案 / 附注（截断到一行），上下以留白补齐 fixed_rows；主行与
+  -- 附注行各自逐行计算左填充（空行不填充）——spinner 行与文案行合成一个视觉
+  -- 块整体居中，帧动画/阶段切换重渲染都重算填充，位置与居中保持稳定；
+  -- extmark 高亮区间随填充平移到新字节区间（lead 为 ASCII 空格，列数=字节数）
   render_loading = function()
     if closed or mode ~= "loading" then
       return
@@ -742,20 +762,31 @@ local function start_ui(initial)
       label = STAGE_LABELS[stage] or "处理中…"
     end
     local sub = (stage ~= "read_more" and type(stage_detail) == "string" and stage_detail ~= "") and stage_detail or ""
-    local linner = math.max(8, loading_width - 6)
+    local linner = inner -- loading 附注截断预算 = 表单折行同一内宽（宽度恒定）
     if sub ~= "" and dw(sub) > linner then
       sub = take_dw(sub, linner - 1):gsub("%s+$", "") .. "…"
     end
     local glyph = SPINNER_FRAMES[frame]
     local main = glyph .. "  " .. label
+    -- 水平居中：lead = floor((inner − 行显示宽) / 2)（超宽退化为不填充，防御
+    -- 理论上的极窄 inner；附注已截断、文案远短于 inner，正常路径不触发）
+    local function center_pad(text)
+      if text == "" then
+        return text, 0
+      end
+      local lead = math.max(0, math.floor((inner - dw(text)) / 2))
+      return string.rep(" ", lead) .. text, lead
+    end
+    local main_line, main_lead = center_pad(main)
+    local sub_line, sub_lead = center_pad(sub)
     local pad = math.floor((fixed_rows - 3) / 2)
     local lines = {}
     for i = 1, pad do
       lines[i] = ""
     end
     lines[pad + 1] = ""
-    lines[pad + 2] = main
-    lines[pad + 3] = sub
+    lines[pad + 2] = main_line
+    lines[pad + 3] = sub_line
     for i = pad + 4, fixed_rows do
       lines[i] = ""
     end
@@ -763,10 +794,10 @@ local function start_ui(initial)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, 0, { end_col = #glyph, hl_group = "HerderQFormOn" })
-    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, #glyph + 2, { end_col = #main, hl_group = "HerderQFormQuestion" })
+    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, main_lead, { end_col = main_lead + #glyph, hl_group = "HerderQFormOn" })
+    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, main_lead + #glyph + 2, { end_col = main_lead + #main, hl_group = "HerderQFormQuestion" })
     if sub ~= "" then
-      vim.api.nvim_buf_set_extmark(buf, ns, pad + 2, 0, { end_col = #sub, hl_group = "Comment" })
+      vim.api.nvim_buf_set_extmark(buf, ns, pad + 2, sub_lead, { end_col = sub_lead + #sub, hl_group = "Comment" })
     end
     sync_focus_titles()
   end
@@ -894,7 +925,8 @@ local function start_ui(initial)
   end
 
   -- <C-Enter> 提交：任意焦点可用；严格未答拦截——第一个「0 选中且自定义空」的
-  -- 题被点名（Qk 未作答）后弹窗保留，光标跳至该题首个选项（选项区有焦点时）
+  -- 题被点名（未作答（第 k 题）：<题干预览>）后弹窗保留，光标跳至该题首个选项
+  -- （选项区有焦点时）
   local function submit()
     if closed or submitted then
       return
@@ -909,7 +941,7 @@ local function start_ui(initial)
       end
       for k = 1, nq do
         if not question_answered(k) then
-          utils.warn(string.format("Q%d 未作答", k))
+          utils.warn(string.format("未作答（第 %d 题）：%s", k, stem_preview(questions[k].question)))
           if focus == "options" and top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
             local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_pen_row[k] or q_first_row[k] or 1
             pcall(vim.api.nvim_set_current_win, top_popup.winid)
@@ -1024,10 +1056,11 @@ local function start_ui(initial)
   end
 
   -- 原位变身（loading → form/fallback，或旧表单 → 新表单）：
-  -- 1) 停 spinner；2) 重算 spec 状态与宽度（高度固定不动）；3) 输入行清空并
-  --    恢复可写；4) 重绑完整表单键位；5) layout:update 原位改几何（同一
-  --    Layout/窗口 id，仅 nvim_win_set_config，不卸载重挂——dim 遮罩挂输入
-  --    buffer 生命周期，全程存活不闪）；6) 重渲染行 + 初始光标/focus。
+  -- 1) 停 spinner；2) 重算 spec 状态（几何恒定：宽度/高度会话期一次定死，
+  --    不再调 layout:update——morph 只重渲染，零几何跳变）；3) 输入行清空并
+  --    恢复可写；4) 重绑完整表单键位；5) 重渲染行 + 初始光标/focus。
+  --    同一 Layout/窗口 id 不卸载重挂——dim 遮罩挂输入 buffer 生命周期，
+  --    全程存活不闪。
   local function morph(spec, on_submit)
     if closed then
       return
@@ -1041,9 +1074,6 @@ local function start_ui(initial)
       vim.api.nvim_buf_set_lines(ib, 0, -1, false, { "" }) -- 重问场景不残留旧草稿
     end
     bind_form_maps()
-    -- position 必须显式传：nui update 不重算未传的 position，50% 居中需随新宽度重算；
-    -- 高度恒为 total_h（morph 不改高度，只调宽度与重渲染）
-    layout:update({ position = "50%", size = { width = width, height = total_h } })
     if top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
       vim.api.nvim_set_option_value("cursorline", true, { win = top_popup.winid })
     end

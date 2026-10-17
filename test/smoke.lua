@@ -2466,6 +2466,154 @@ check(ask_obj ~= nil and ask_obj.via == "adapter" and ask_obj.user == "usr2", "s
 llm.set_adapter(nil)
 
 -- ---------------------------------------------------------------------------
+-- llm 请求定制（extra_body / extra_headers / disable_thinking，仿 neogit ai_commit）
+-- ---------------------------------------------------------------------------
+check(
+  cfg.options.llm.extra_body == nil
+    and cfg.options.llm.extra_headers == nil
+    and cfg.options.llm.disable_thinking == false,
+  "llm 默认 extra_body/extra_headers=nil、disable_thinking=false"
+)
+
+local body_argv_calls = {}
+local eb, hcount -- 复用的断言临时变量
+utils.set_exec_to_file(function(argv, on_done)
+  table.insert(body_argv_calls, argv)
+  on_done({
+    code = 0,
+    stdout = vim.json.encode({ choices = { { message = { content = vim.json.encode({ ok = true }) } } } }),
+    stderr = "",
+  })
+end)
+-- 从 curl argv 的 -d 后继元素解出请求体（decode 断言用）
+local function req_body(argv)
+  for i, a in ipairs(argv) do
+    if a == "-d" then
+      return vim.json.decode(argv[i + 1])
+    end
+  end
+end
+
+-- extra_body 深合并进请求体（内置字段保留）
+body_argv_calls = {}
+cfg.options.llm.extra_body = { enable_thinking = false }
+llm.ask({ system = "s", user = "u" }, function() end)
+eb = req_body(body_argv_calls[1])
+check(
+  eb ~= nil and eb.enable_thinking == false and eb.temperature == 0 and eb.response_format.type == "json_object",
+  "extra_body 深合并进 -d body（内置字段保留）"
+)
+
+-- extra_body 嵌套表深合并（vLLM 的 chat_template_kwargs）
+body_argv_calls = {}
+cfg.options.llm.extra_body = { chat_template_kwargs = { enable_thinking = false } }
+llm.ask({ system = "s", user = "u" }, function() end)
+eb = req_body(body_argv_calls[1])
+check(
+  eb ~= nil and type(eb.chat_template_kwargs) == "table" and eb.chat_template_kwargs.enable_thinking == false,
+  "extra_body 嵌套表（chat_template_kwargs）深合并"
+)
+
+-- extra_body 覆盖内置字段（用户赢）
+body_argv_calls = {}
+cfg.options.llm.extra_body = { temperature = 0.2 }
+llm.ask({ system = "s", user = "u" }, function() end)
+eb = req_body(body_argv_calls[1])
+check(eb ~= nil and eb.temperature == 0.2, "extra_body 覆盖内置字段（temperature=0.2）")
+cfg.options.llm.extra_body = nil
+
+-- disable_thinking 厂商预设：按 base_url 明文 needle 依序匹配
+cfg.options.llm.disable_thinking = true
+local preset_cases = {
+  { base = "http://127.0.0.1:11434", probe = function(b) return b.think == false end },
+  {
+    base = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    probe = function(b) return b.enable_thinking == false end,
+  },
+  {
+    base = "https://api.deepseek.com",
+    probe = function(b) return type(b.thinking) == "table" and b.thinking.type == "disabled" end,
+  },
+  {
+    base = "https://openrouter.ai/api/v1",
+    probe = function(b) return type(b.reasoning) == "table" and b.reasoning.enabled == false end,
+  },
+  { base = "https://api.openai.com/v1", probe = function(b) return b.reasoning_effort == "minimal" end },
+}
+for _, pc in ipairs(preset_cases) do
+  body_argv_calls = {}
+  cfg.options.llm.base_url = pc.base
+  llm.ask({ system = "s", user = "u" }, function() end)
+  local pb = req_body(body_argv_calls[1])
+  check(pb ~= nil and pc.probe(pb), "disable_thinking 预设注入：" .. pc.base)
+end
+
+-- 未知端点：不注入 + warn 一次（第二次调用不再 warn）
+local warns = {}
+local saved_warn = utils.warn
+utils.warn = function(msg)
+  table.insert(warns, msg)
+end
+body_argv_calls = {}
+cfg.options.llm.base_url = "https://llm.example.com/v1"
+llm.ask({ system = "s", user = "u" }, function() end)
+local ub = req_body(body_argv_calls[1])
+check(
+  ub ~= nil
+    and ub.think == nil
+    and ub.enable_thinking == nil
+    and ub.thinking == nil
+    and ub.reasoning == nil
+    and ub.reasoning_effort == nil
+    and #warns == 1,
+  "disable_thinking 未知端点 → 不注入字段 + warn 一次"
+)
+body_argv_calls = {}
+llm.ask({ system = "s", user = "u" }, function() end)
+check(#warns == 1, "未知端点 warn 每会话仅一次（第二次调用静默）")
+utils.warn = saved_warn
+
+-- extra_body 与预设同时存在 → extra_body 赢（覆盖预设）
+body_argv_calls = {}
+cfg.options.llm.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+cfg.options.llm.extra_body = { enable_thinking = true }
+llm.ask({ system = "s", user = "u" }, function() end)
+eb = req_body(body_argv_calls[1])
+check(eb ~= nil and eb.enable_thinking == true, "extra_body 与 disable_thinking 预设同时存在 → extra_body 赢")
+cfg.options.llm.disable_thinking = false
+cfg.options.llm.extra_body = nil
+cfg.options.llm.base_url = "https://api.deepseek.com"
+
+-- extra_headers 追加 HTTP 头（Authorization/Content-Type 之后）
+body_argv_calls = {}
+cfg.options.llm.extra_headers = { ["X-Tenant"] = "team-a", TTL = 30 }
+llm.ask({ system = "s", user = "u" }, function() end)
+hcount = 0
+for _, a in ipairs(body_argv_calls[1]) do
+  if a == "-H" then
+    hcount = hcount + 1
+  end
+end
+check(
+  vim.tbl_contains(body_argv_calls[1], "X-Tenant: team-a")
+    and vim.tbl_contains(body_argv_calls[1], "TTL: 30")
+    and hcount == 4,
+  "extra_headers 追加 -H \"k: v\"（数字值 tostring，含内置共 4 个）"
+)
+cfg.options.llm.extra_headers = nil
+
+-- 未配置 extra_headers：仅 Authorization/Content-Type 两个 -H
+body_argv_calls = {}
+llm.ask({ system = "s", user = "u" }, function() end)
+hcount = 0
+for _, a in ipairs(body_argv_calls[1]) do
+  if a == "-H" then
+    hcount = hcount + 1
+  end
+end
+check(hcount == 2, "未配置 extra_headers 时仅 Authorization/Content-Type 两个 -H")
+
+-- ---------------------------------------------------------------------------
 -- 编排（question.ask）：need_more 翻倍重读 / 失败重试 / fallback / 文本通道提交
 -- ---------------------------------------------------------------------------
 cfg.options.tools.qatool = { title = " QA Chat ", paste_wrap = true }
@@ -2560,6 +2708,20 @@ form_specs = {}
 read_log = {}
 question_mod.ask()
 check(#read_log == 2 and read_log[1] == 80 and read_log[2] == 160, "need_more → --lines 翻倍重读（80 → 160）")
+-- system_prompt 逐字语义（原始内容是唯一事实源）：question/options 均 verbatim
+-- 复制、绝不剥离/改写 —— 字符串断言（含 verbatim 措辞、无任何剥离指示）
+local qsys = adapter_log[1] and adapter_log[1].system or ""
+check(
+  qsys:find("copied verbatim", 1, true) ~= nil
+    and qsys:find("Never invent questions or options", 1, true) ~= nil
+    and qsys:find("never remove, rewrite, or renumber", 1, true) ~= nil
+    and qsys:find("must NOT contain the option", 1, true) ~= nil
+    and qsys:find("MAY use markdown syntax", 1, true) ~= nil
+    and qsys:find("KEEP each option's original label prefix", 1, true) ~= nil
+    and qsys:find("strip", 1, true) == nil
+    and qsys:find("the form numbers questions", 1, true) == nil,
+  "system_prompt 逐字语义 + question 不含选项文本 + 保留 markdown 修饰"
+)
 check(#form_specs == 1 and form_specs[1].mode == "form", "complete → form 表单")
 check(
   type(form_specs[1].questions) == "table"
@@ -2605,6 +2767,65 @@ check(
     and form_specs[1].options == nil
     and form_specs[1].suggested == nil,
   "单题 complete → spec.questions 长度 1（每题字段齐全，无旧顶层字段）"
+)
+
+-- 1c) desc 字段（extraction schema v2 扩展）：system_prompt 携带 schema 与规则
+-- 措辞；validate 逐字携带 / 缺省归一 ""；morph spec 每题携带 desc
+script = {
+  {
+    status = "complete",
+    questions = {
+      {
+        question = "Deploy how?",
+        desc = "➡️ 推荐 (a)：Docker，环境一致、回滚方便",
+        options = { "Docker", "bare metal" },
+        multiple = false,
+        suggested = { 1 },
+      },
+      { question = "No desc here?", options = { "yes", "no" }, multiple = true, suggested = {} },
+    },
+  },
+}
+form_specs = {}
+adapter_log = {}
+question_mod.ask()
+local dsys = adapter_log[1] and adapter_log[1].system or ""
+check(
+  dsys:find('"desc": string', 1, true) ~= nil
+    and dsys:find("explanatory", 1, true) ~= nil
+    and dsys:find("must NOT contain the", 1, true) ~= nil
+    and dsys:find('use "" when', 1, true) ~= nil
+    and dsys:find("Never invent questions or options", 1, true) ~= nil,
+  "system_prompt 携带 desc schema 行与规则措辞（说明文本/不含选项文本/缺省空串）"
+)
+check(
+  #form_specs == 1
+    and form_specs[1].mode == "form"
+    and form_specs[1].questions[1].desc == "➡️ 推荐 (a)：Docker，环境一致、回滚方便",
+  "morph spec 第 1 题逐字携带 desc"
+)
+check(
+  form_specs[1].questions[2].desc == "",
+  "morph spec 缺省 desc 归一为空串（validate 缺省携带）"
+)
+
+-- 1d) desc 非 string → 整体无效 → 重试路径（失败原因附 desc 措辞），重试成功出 form
+script = {
+  { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = false, desc = 42 } } },
+  { status = "complete", questions = { { question = "Q?", options = { "a" }, multiple = false } } },
+}
+form_specs = {}
+adapter_log = {}
+question_mod.ask()
+check(
+  #adapter_log == 2 and adapter_log[2].system:find("desc 必须是 string", 1, true) ~= nil,
+  "desc 非 string → 整体无效并重试（失败原因附 questions[k] desc 必须是 string）"
+)
+check(
+  form_specs[1] ~= nil
+    and form_specs[1].mode == "form"
+    and form_specs[1].questions[1].desc == "",
+  "desc 无效重试成功 → form 表单（重试轮缺省 desc 归一空串）"
 )
 
 -- 2) 无效 JSON 重试 1 次后成功（重试 system 附上次失败原因；不重读终端）

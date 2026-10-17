@@ -236,11 +236,20 @@ M.defaults = {
     retries = 1, -- 无效 JSON / HTTP 失败的重试次数（重试附上次失败原因）
     hint = true, -- agent blocked 时提醒 :AIQuestion（订阅 AIAgentBlocked 事件）
     adapter = nil, -- 自定义提取通道：fun(opts, cb)，opts 见 llm.lua（测试注入 / 社区 adapter）
+    -- 请求定制（语义仿 neogit ai_commit 的 extra_body / extra_headers / disable_thinking）
+    extra_body = nil, -- 追加字段：最后 force 深合并进 chat/completions 请求体、覆盖一切内置字段
+                      -- （vLLM/DashScope 等关思考：{ chat_template_kwargs = { enable_thinking = false } }）；
+                      -- 与 disable_thinking 预设同时存在时 extra_body 赢
+    extra_headers = nil, -- 追加 HTTP 头（table<string, string|number|boolean>，网关按头控流时用）
+    disable_thinking = false, -- 按 base_url 厂商预设自动注入关思考字段
+                              -- （ollama/deepseek/dashscope/openrouter/openai）；未知端点不注入，
+                              -- 改用 extra_body 显式配置
   },
 
   -- agent 提问表单弹窗尺寸（ui/question_form.lua 读取）：固定高度 = 编辑器行数 ×
-  -- height_ratio（全形态同高，morph 零跳变）；缺失时 UI 自带 0.6 缺省
-  question_form = { height_ratio = 0.6 },
+  -- height_ratio、固定宽度 = 编辑器列数 × width_ratio（收敛到 [56, 88]），
+  -- 全形态同尺寸、morph 零几何跳变；缺失时 UI 自带 0.6 / 0.7 缺省
+  question_form = { height_ratio = 0.6, width_ratio = 0.7 },
 
   -- 发送给 agent 的选区上下文上限（借鉴 codex.nvim：超限拒绝而非静默截断）
   context = {

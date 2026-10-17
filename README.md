@@ -137,8 +137,10 @@ late LLM result) and morphs in place into the form once extraction finishes:
    The model may answer `need_more`, which doubles the captured lines and
    re-asks (read-more loop, `max_read_more` cap); invalid JSON is retried once
    with the failure reason (`retries`).
-3. Render a popup form with a fixed height (`question_form.height_ratio`,
-   default 60% — identical across loading/form/fallback, no resize on morph).
+3. Render a popup form with a fixed size (`question_form.height_ratio`,
+   default 60% of the editor height; `question_form.width_ratio`, default 70%
+   of the columns, clamped to 56–88 — identical across loading/form/fallback,
+   no resize on morph).
    Each question is its own section separated by `---` rules (the buffer is
    `filetype=markdown` with `buftype=nofile`: syntax highlighting applies,
    markdown preview plugins don't attach). `space` toggles options (radio when
@@ -173,6 +175,12 @@ require("herder-agents").setup({
     max_read_more = 2, -- read-more rounds
     retries = 1,       -- invalid-JSON retries (failure reason attached)
     hint = true,       -- notify :AIQuestion on AIAgentBlocked
+    extra_body = nil, -- extra fields deep-merged into the request body last (wins over
+                      -- built-ins), e.g. { enable_thinking = false } to turn off thinking
+    extra_headers = nil, -- extra HTTP headers, e.g. { ["X-Tenant"] = "team-a" }
+    disable_thinking = false, -- inject the vendor's thinking-off field per base_url
+                              -- (ollama/deepseek/dashscope/openrouter/openai); unknown
+                              -- endpoints are left untouched — use extra_body instead
   },
 })
 ```
