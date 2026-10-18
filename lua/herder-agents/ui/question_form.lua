@@ -66,8 +66,9 @@
 -- 多问题分节视觉：每节以 `## <标号>` 行开头（ATX 标题：markdown ft 语法高亮自
 -- 然生效，叠 HerderQFormQuestion 粗体 extmark；标号取该题 label，为空回退位置
 -- 序号 `Qk`，N=1 同样有节头），节头与题干之间不空行（ATX 标题无 setext 风险），
--- 其后题干、空行、选项、✎ 自定义行、desc 说明行（desc 仅展示、Comment 压暗、
--- 绝不进入提交文本，为空时不产生任何额外行），节间一条 `---` 分割线（markdown
+-- 其后题干、空行、选项（含 Enter 生成的自定义选项，见下）、desc 说明行（紧跟
+-- 选项区收束节尾：选项后空一行；desc 仅展示、Comment 压暗、绝不进入提交文本，
+-- 为空时不产生任何额外行），节间一条 `---` 分割线（markdown
 -- 主题断行，叠 extmark 保证可见；N=1 无分割线）。normalize_question 做防御性
 -- 前缀剥离：label 非空且 question 以 label 开头（system_prompt 已要求编号进
 -- label，这里兜底 LLM 漏剥）时剥掉这一处前导，label 为空不动——其余内容仍是
@@ -78,15 +79,32 @@
 -- 空格、分割线前留空行，避免 4 空格缩进代码块 / setext 标题等 markdown 误判。
 --
 -- 已确认交互（勿改）：<Space>/x 切换选项（单选 radio 恒一项、重复 space 不反选，
--- 多选 checkbox 增删；只作用于光标所在题）；suggested 各题预选（单选取第一个、
--- 多选全取，越界忽略）、初始光标落第一题建议项；每题末尾「✎ 自定义答案…」伪
--- 选项行（后跟已填文本截断预览），其上 space/tab → 底部输入区按题重绑定（标题
--- 显示「自定义答案 · <label 或 第 k 题>」，N=1 纯「自定义答案」），tab 从输入区
--- 返回该题选项区，各题自定义互不干扰；<Tab> 选项区/输入行移动焦点；<C-Enter>
--- 任意焦点提交；<Esc>/q 取消；fallback = 只读 raw_text + 单一自定义输入行（不按
--- 题），提交仅自定义文本。
+-- 多选 checkbox 增删；只作用于光标所在题；自定义选项同权参与切换）；suggested
+-- 各题预选（单选取第一个、多选全取，越界忽略）、初始光标落第一题建议项；选项
+-- 区（normal）按 a → 底部输入框打开并聚焦，绑定光标所在题（题目判定沿用
+-- meta_at_cursor，无则当前 input_q/第 1 题），标题显示「自定义答案 · <label 或
+-- 第 k 题>」（N=1 纯「自定义答案」）；预填 = 该题已有自定义选项的文本，否则
+-- 上次草稿，否则空。输入行 Enter = 提交自定义——为该题生成/更新一个正式选项
+-- （追加在原选项之后、索引恒为该题原选项数+1；已存在则原位更新文本、选中状态
+-- 保持不变（编辑语义）；新建即选中：radio 排他换选（原选中取消）、checkbox 与
+-- 已选并存）；空文本 Enter 仅 utils.warn 提示、不关输入框；提交后焦点返回选项
+-- 区、光标落在该自定义选项上。自定义选项与普通选项同权：space/x 切换、Tab/
+-- S-Tab 跳转列表包含它、「· 建议」标记永不打在它上、提交按选中项原文逐行输出
+-- （无任何前缀）。Esc 关输入框、保留 per-question 草稿（误触不丢字；Tab/S-Tab
+-- 返回选项区，草稿同样保留）；<C-Enter> 任意焦点提交整个表单（form 路径恒
+-- compose_questions(questions, answers, {})——未 Enter 提交的草稿不计入答案）；
+-- <Esc>/q 取消；fallback = 只读 raw_text + 单一自定义输入行（不按题、无 a 键、
+-- Enter 不劫持），提交仅自定义文本、语义完全不变。
 --
--- 空提交策略（严格未答拦截）：<C-Enter> 时任一题「0 选中且自定义空」→ 提示
+-- 状态模型：sel[k] = { [选项索引] = true }（自定义选项索引 = 原选项数+1，原文
+-- 选项数在 normalize 时固定为 q.n_base）；custom_opt[k] = { text }（Enter 生成/
+-- 更新，文本同步物化进 q.options[n_base+1] 供渲染与 compose 直接消费）；drafts[k]
+-- = 输入行草稿（Esc/Tab/C-Enter 离开输入行时归位保留）。form→form 重问（morph）
+-- 时按题干逐字匹配延续：同题干的旧题继承选中（原选项位需索引与文本都相同）、
+-- 自定义选项（含选中）与草稿；未匹配的题按 suggested 全新作答。
+--
+-- 空提交策略（严格未答拦截）：<C-Enter> 时任一题「0 选中」（自定义选项与普通
+-- 选项同权计入已答；输入行未提交的草稿不算）→ 提示
 -- 「未作答（<label 或 第 k 题>）：<题干预览>」（首个未答题；原始标号与 agent
 -- 终端对得上，无标号回退位置序号；题干预览帮定位）、光标跳至该题首个选项、
 -- 弹窗保留不提交（防误触把空答案发给 agent，与 Chat 空草稿拦截一致）。
@@ -122,10 +140,9 @@ local function ensure_highlights()
     vim.api.nvim_set_hl(0, "HerderQFormNormal", { link = "NormalFloat", default = true })
   end
   local defs = {
-    HerderQFormQuestion = { link = "Title" }, -- 节头 ## 行 / ✎ 字形 / fallback 原文：主题标题色（多主题 bold+彩色）
+    HerderQFormQuestion = { link = "Title" }, -- 节头 ❓ 行 / fallback 原文：主题标题色（多主题 bold+彩色）
     HerderQFormText = { link = "HerderQFormNormal" }, -- 正文（题干/选项文字）：常规前景 + 浮窗底（合成组，见上）
-    HerderQFormOn = { link = "String" }, -- 选中字形 / ✎ 预览 / spinner 帧
-    HerderQFormOff = { link = "LineNr" }, -- 未选中字形 / 「自定义答案…」标签
+    HerderQFormOn = { link = "String" }, -- 选中字形 / spinner 帧
     HerderQFormDivider = { link = "Comment" }, -- 节间 `---` 分割线
   }
   for name, def in pairs(defs) do
@@ -224,12 +241,9 @@ function M.compose_questions(questions, answers, customs)
   return table.concat(blocks, "\n\n")
 end
 
--- 建议标记（渲染在选项文本末尾，放不下则独占一行；Comment 灰）
+-- 建议标记（渲染在选项文本末尾，放不下则独占一行；Comment 灰）；
+-- 只可能落在原选项上——Enter 生成的自定义选项永不带建议标记
 local MARKER = "· 建议"
-
--- ✎ 自定义答案伪选项行
-local PEN_GLYPH = "✎"
-local PEN_LABEL = "自定义答案…"
 
 -- ── loading 态常量（模块级纯数据，无副作用）──
 local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -292,8 +306,10 @@ end
 -- （system_prompt 已要求编号进 label，这里兜底 LLM 漏剥；剥后为空则不剥；
 -- label 为空不动），其余逐字不改写；options 一律逐字不动；
 -- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示；
--- label 仅 tostring 归一（缺省 ""）——原始标号元数据，驱动节头 `## <label>`、
--- 提交块头 / 未答拦截提示 / 输入行标题
+-- label 仅 tostring 归一（缺省 ""）——原始标号元数据，驱动节头 `❓ <label>`、
+-- 提交块头 / 未答拦截提示 / 输入行标题。n_base = 原选项数（固定）：Enter 生成
+-- 的自定义选项恒追加在索引 n_base+1，suggested 越界过滤只认原选项（自定义
+-- 选项永不带「· 建议」标记）
 local function normalize_question(q)
   q = type(q) == "table" and q or {}
   local label = tostring(q.label or "")
@@ -331,6 +347,7 @@ local function normalize_question(q)
       end
     end
   end
+  item.n_base = #item.options -- 原选项数固定：自定义选项索引恒为 n_base+1
   return item
 end
 
@@ -374,20 +391,21 @@ local function start_ui(initial)
   -- 会话期恒定，不在重算范围）──
   local mode = "loading" -- "loading" | "form" | "fallback"
   local is_form = true
-  local questions = {} -- 归一化后的题目数组（1..nq）
+  local questions = {} -- 归一化后的题目数组（1..nq；Enter 生成的自定义选项文本
+  -- 物化在 q.options[q.n_base+1]，q.n_base 保持原选项数不变）
   local nq = 0
   local raw_text = ""
-  local sel = {} -- sel[k] = { [选项索引] = true }
-  local customs = {} -- customs[k] = 第 k 题自定义文本（trim 后）
+  local sel = {} -- sel[k] = { [选项索引] = true }（自定义选项索引 = n_base+1 同权）
+  local custom_opt = {} -- custom_opt[k] = { text }（Enter 生成/更新的正式自定义选项）
+  local drafts = {} -- drafts[k] = 第 k 题输入行草稿（trim 后；Esc/Tab 离开输入行保留）
   local on_submit_cb = function() end
   local closed, submitted = false, false
   local focus = nil -- "options" | "input"（loading 态不适用）
-  local row_meta = {} -- 物理行 → { kind, q, opt }（kind: header/blank/divider/option/pen/raw）
+  local row_meta = {} -- 物理行 → { kind, q, opt }（kind: qhead/header/blank/option/desc/divider/raw）
   local q_first_row = {} -- 题号 → 节首个内容行（跳过分割线）
-  local q_opt_first_row = {} -- 题号 → { 选项索引 → 首个物理行 }
-  local q_pen_row = {} -- 题号 → ✎ 行
+  local q_opt_first_row = {} -- 题号 → { 选项索引 → 首个物理行 }（含自定义选项）
   local input_q = 1 -- 输入行当前绑定的题号（fallback 不适用）
-  local leave_row = {} -- 题号 → 离开选项区时光标行（tab 返回时回到原位附近）
+  local leave_row = {} -- 题号 → 离开选项区时光标行（tab/a 返回时回到原位附近）
 
   -- ── loading 状态 ──
   local stage, stage_detail = "capture", nil
@@ -395,16 +413,14 @@ local function start_ui(initial)
   local spinner_timer = nil
 
   local function legend_for(form)
-    return form and " space 选择 · tab 焦点 · ctrl+enter 提交 · esc 取消 "
+    return form and " space 选择 · a 自定义输入 · tab/s-tab 跳转 · ctrl+enter 提交 · esc 取消 "
       or " tab 焦点 · ctrl+enter 提交 · esc 取消 "
   end
 
-  -- 第 k 题是否已作答（有选中或有自定义）
+  -- 第 k 题是否已作答：任一选项选中即已答（自定义选项同权计入；
+  -- 输入行未 Enter 提交的草稿不算）
   local function question_answered(k)
-    if next(sel[k] or {}) ~= nil then
-      return true
-    end
-    return (customs[k] or "") ~= ""
+    return next(sel[k] or {}) ~= nil
   end
 
   -- 未答拦截提示的题干预览：题干前 ~30 显示宽字符，超出截断加 …（拦截点名用
@@ -465,7 +481,7 @@ local function start_ui(initial)
   -- 行模型：每行 { text, marks = { {起始字节, 结束字节, hl组} }, kind, q, opt }。
   -- 题面文本（节头/题干/fallback 原文）不再整行压 extmark——filetype=markdown 的
   -- 语法高亮直接生效（ATX 节头/代码块/加粗等与手工折行共存）；extmark 只用于
-  -- 结构性字形（节头粗体/选项框/✎/分割线）。
+  -- 结构性字形（节头粗体/选项框 ✓/分割线）。
   local function build_rows()
     local rows = {}
     local function add(text, marks, kind, q, opt)
@@ -481,13 +497,13 @@ local function start_ui(initial)
           add(string.rep("-", inner), { { 0, inner, "HerderQFormDivider" } }, "divider", k, nil)
           add("", {}, "blank", k, nil)
         end
-        -- 节头与题干同行：`## <标号> <题干首段>`（label 非空用原始标号，否则回退
-        -- 位置序号 Qk；N=1 同样有）。ATX 标题整行生效（markdown ft 语法高亮），
-        -- 「## 标号」前缀压 HerderQFormQuestion 粗体 extmark；题干首段折行预算
-        -- 扣除节头宽 + 连接空格，续行平齐不缩进；不参与 space 选择；题干为空
-        -- 则整行仅节头
+        -- 节头与题干同行：`❓ <标号> <题干首段>`（label 非空用原始标号，否则回退
+        -- 位置序号 Qk；N=1 同样有）。「❓ 标号」前缀压 HerderQFormQuestion
+        --（Title 色）extmark、低优先级（50）兜底——不再用 markdown ATX 记号；
+        -- 题干首段折行预算扣除节头宽 + 连接空格，续行平齐不缩进；不参与
+        -- space 选择；题干为空则整行仅节头
         local head_label = q.label ~= "" and q.label or ("Q" .. k)
-        local head = "## " .. head_label
+        local head = "❓ " .. head_label
         if q.question == "" then
           add(head, { { 0, #head, "HerderQFormQuestion", 50 } }, "qhead", k, nil)
         else
@@ -540,32 +556,12 @@ local function start_ui(initial)
             add(text, marks, "option", k, i)
           end
         end
-        -- ✎ 自定义答案伪选项行（预览截断到内宽；已填时预览亮 String 色）
-        local prefix = PEN_GLYPH .. " "
-        local base = prefix .. PEN_LABEL
-        local ptext = base
-        local pmarks = {
-          { 0, #PEN_GLYPH, "HerderQFormQuestion" },
-          { #prefix, #base, "HerderQFormOff" },
-        }
-        local preview = customs[k] or ""
-        if preview ~= "" then
-          local budget = inner - dw(base) - 2
-          if budget >= 4 then
-            local shown = preview
-            if dw(shown) > budget then
-              shown = take_dw(shown, budget - 1) .. "…"
-            end
-            ptext = base .. "  " .. shown
-            pmarks[#pmarks + 1] = { #base + 2, #ptext, "HerderQFormOn" }
-          end
-        end
-        add(ptext, pmarks, "pen", k, nil)
-        -- desc 说明行（仅展示、不进提交文本）：渲染在 ✎ 行之后（节尾，建议/
-        -- 选项/自定义区之后收束说明）；Comment 压暗（与「· 建议」标记/图例同
-        -- 语系），折满 inner、续行平齐不缩进（与题干续行同策略）；不参与 space
-        -- 选择（row_opt 为 nil）；desc 为空 → 不产生任何额外行
+        -- desc 说明行（仅展示、不进提交文本）：渲染在选项区之后（建议/选项/
+        -- 自定义选项全部收束后的节尾），与上方选项区空一行分隔；Comment 压暗
+        --（与「· 建议」标记/图例同语系），折满 inner、续行平齐不缩进（与题干
+        -- 续行同策略）；不参与 space 选择与 j/k 导航；desc 为空 → 不产生额外行
         if q.desc ~= "" then
+          add("", {}, "blank", k, nil)
           for _, seg in ipairs(wrap_dw(q.desc, inner)) do
             add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
           end
@@ -592,10 +588,31 @@ local function start_ui(initial)
     on_submit_cb = on_submit or function() end
     submitted = false
 
+    -- form→form 重问延续：变身前的表单态按题干逐字匹配，同题干的旧题继承
+    -- 选中/自定义选项/草稿（原选项位需索引与文本都相同才继承选中；自定义
+    -- 选项选中映射到新「原选项数+1」；radio 只保最低已选项）；loading 直开
+    -- 与 fallback 变身（旧态无题表）天然全新作答
+    local old_pool = {}
+    if is_form then
+      for j, oq in ipairs(questions) do
+        old_pool[#old_pool + 1] = { q = oq, sel = sel[j] or {}, co = custom_opt[j], draft = drafts[j] or "" }
+      end
+    end
+    local function take_old(stem)
+      for idx, e in ipairs(old_pool) do
+        if e.q.question == stem then
+          old_pool[idx] = old_pool[#old_pool]
+          old_pool[#old_pool] = nil
+          return e
+        end
+      end
+      return nil
+    end
+
     is_form = spec.mode ~= "fallback"
     questions = {}
     raw_text = ""
-    sel, customs, input_q, leave_row = {}, {}, 1, {}
+    sel, custom_opt, drafts, input_q, leave_row = {}, {}, {}, 1, {}
     if is_form then
       if type(spec.questions) == "table" and #spec.questions > 0 then
         for _, q in ipairs(spec.questions) do
@@ -610,21 +627,59 @@ local function start_ui(initial)
     end
     nq = #questions
 
-    -- 选中初值：单选取第一个有效 suggested（无则初始无选中），多选取全部 suggested
     for k, q in ipairs(questions) do
+      local match = take_old(q.question)
       local s = {}
-      if q.multiple then
-        for i in pairs(q.suggested_set) do
-          s[i] = true
+      if match then
+        -- 延续旧作答：原选项位文本相同才继承；自定义选项（含文本物化）延续
+        local oldq = match.q
+        local keys = {}
+        for i in pairs(match.sel) do
+          keys[#keys + 1] = i
         end
-      else
-        for _, i in ipairs(q.suggested) do
-          s[i] = true
-          break
+        table.sort(keys)
+        local lowest = nil
+        for _, i in ipairs(keys) do
+          local keep = nil
+          if i <= oldq.n_base and i <= q.n_base and oldq.options[i] == q.options[i] then
+            keep = i
+          elseif match.co and i == oldq.n_base + 1 then
+            keep = q.n_base + 1
+          end
+          if keep then
+            s[keep] = true
+            if not lowest or keep < lowest then
+              lowest = keep
+            end
+          end
+        end
+        if not q.multiple then
+          s = lowest and { [lowest] = true } or {}
+        end
+        if match.co then
+          custom_opt[k] = match.co
+          q.options[q.n_base + 1] = match.co.text
+        end
+        drafts[k] = match.draft
+      end
+      if next(s) == nil then
+        -- 未延续（新题/旧题未作答）：suggested 初选——单选取第一个有效建议
+        -- （无则初始无选中），多选取全部 suggested
+        if q.multiple then
+          for i in pairs(q.suggested_set) do
+            s[i] = true
+          end
+        else
+          for _, i in ipairs(q.suggested) do
+            s[i] = true
+            break
+          end
         end
       end
       sel[k] = s
-      customs[k] = ""
+      if drafts[k] == nil then
+        drafts[k] = ""
+      end
     end
     focus = is_form and "options" or "input"
   end
@@ -793,7 +848,7 @@ local function start_ui(initial)
     end
     local rows = build_rows()
     local lines = {}
-    row_meta, q_first_row, q_opt_first_row, q_pen_row = {}, {}, {}, {}
+    row_meta, q_first_row, q_opt_first_row = {}, {}, {}
     for i, r in ipairs(rows) do
       lines[i] = r.text
       row_meta[i] = { kind = r.kind, q = r.q, opt = r.opt }
@@ -805,8 +860,6 @@ local function start_ui(initial)
         if not q_opt_first_row[r.q][r.opt] then
           q_opt_first_row[r.q][r.opt] = i
         end
-      elseif r.kind == "pen" and r.q then
-        q_pen_row[r.q] = i
       end
     end
     vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
@@ -906,7 +959,8 @@ local function start_ui(initial)
     return row_meta[row], row
   end
 
-  -- 输入行草稿归位当前绑定题（trim；空串=未填）
+  -- 输入行草稿归位当前绑定题（trim；空串=未填；form 专属——fallback 输入行
+  -- 语义不变，不经草稿）
   local function flush_input()
     if not is_form then
       return
@@ -915,25 +969,17 @@ local function start_ui(initial)
       return
     end
     local lines = vim.api.nvim_buf_get_lines(input_popup.bufnr, 0, -1, false)
-    customs[input_q] = vim.trim(table.concat(lines, "\n"))
+    drafts[input_q] = vim.trim(table.concat(lines, "\n"))
   end
 
-  -- 输入区按题重绑定：旧题草稿归位、新题草稿回填（同题重复绑定不动缓冲，
-  -- 输入中的草稿不丢）
-  local function bind_input(q)
-    if not is_form or type(q) ~= "number" or not questions[q] then
-      return
+  -- a 唤起预填：该题已有自定义选项 → 其文本；否则上次草稿；否则空
+  --（已提交的自定义选项是权威内容，草稿让位）
+  local function custom_prefill(k)
+    local co = custom_opt[k]
+    if co and co.text ~= "" then
+      return co.text
     end
-    if q == input_q then
-      return
-    end
-    flush_input()
-    input_q = q
-    if input_popup.bufnr and vim.api.nvim_buf_is_valid(input_popup.bufnr) then
-      local text = customs[input_q] or ""
-      local lines = text == "" and { "" } or vim.split(text, "\n", { plain = true })
-      vim.api.nvim_buf_set_lines(input_popup.bufnr, 0, -1, false, lines)
-    end
+    return drafts[k] or ""
   end
 
   -- Tab 目标：聚焦输入行并进入插入（光标行尾，GA 语义：立即可输入/续写）
@@ -949,23 +995,49 @@ local function start_ui(initial)
     end
   end
 
-  -- 聚焦输入行并绑定到第 q 题（✎ 行 space/tab 与选项区 Tab 共用）；
-  -- q 为空时绑定光标所在节；离开选项区时记录返回行
-  local function focus_input_for(q)
-    if not is_form then
-      focus_input()
+  -- a（选项区 normal）：输入框打开并聚焦，绑定光标所在题（meta_at_cursor 无题
+  -- 则当前 input_q/第 1 题）；离开选项区时记录返回行；旧绑定题缓冲先归位草稿，
+  -- 再按预填规则回填（custom 文本 > 草稿 > 空）
+  local function open_custom_for(k)
+    if closed or not is_form then
       return
     end
     local m, row = meta_at_cursor()
     if focus == "options" and m and m.q and row then
       leave_row[m.q] = row
     end
-    bind_input(q or (m and m.q) or input_q)
+    if type(k) ~= "number" or not questions[k] then
+      k = (m and m.q) or input_q
+    end
+    if not questions[k] then
+      return
+    end
+    flush_input() -- 旧绑定题草稿归位（此时 input_q 尚未改）
+    input_q = k
+    if input_popup.bufnr and vim.api.nvim_buf_is_valid(input_popup.bufnr) then
+      local text = custom_prefill(k)
+      local lines = text == "" and { "" } or vim.split(text, "\n", { plain = true })
+      vim.api.nvim_buf_set_lines(input_popup.bufnr, 0, -1, false, lines)
+    end
     focus_input()
   end
 
-  -- Tab 目标（输入行侧）：聚焦选项区。form：回到输入行当前绑定题，优先落回
-  -- 离开时的行（失效则该题首选项/✎ 行），并刷新 ✎ 预览与标题已答计数
+  -- 聚焦选项区指定行（Enter 提交自定义后的回落路径；调用方已重渲染）
+  local function focus_options_row(row)
+    if closed or not top_popup.winid or not vim.api.nvim_win_is_valid(top_popup.winid) then
+      return
+    end
+    focus = "options"
+    vim.api.nvim_set_current_win(top_popup.winid)
+    pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
+    sync_focus_titles()
+    if vim.api.nvim_get_mode().mode:match("^i") then
+      vim.api.nvim_input("<C-[>")
+    end
+  end
+
+  -- Tab 目标（输入行侧）：聚焦选项区。form：草稿归位（保留）后回到输入行当前
+  -- 绑定题，优先落回离开时的行（失效则该题首选项），并刷新标题已答计数
   local function focus_options_for_input()
     if closed or not top_popup.winid or not vim.api.nvim_win_is_valid(top_popup.winid) then
       return
@@ -976,16 +1048,94 @@ local function start_ui(initial)
       local k = input_q
       row = leave_row[k]
       if not row or not row_meta[row] or row_meta[row].q ~= k then
-        row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_pen_row[k] or q_first_row[k] or 1
+        row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_first_row[k] or 1
       end
     end
     focus = "options"
     vim.api.nvim_set_current_win(top_popup.winid)
-    render() -- ✎ 预览/已答计数随草稿归位刷新
+    render() -- 已答计数随选中态刷新
     pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
     sync_focus_titles()
     if vim.api.nvim_get_mode().mode:match("^i") then
       vim.api.nvim_input("<C-[>")
+    end
+  end
+
+  -- Enter（输入行）= 提交自定义：为绑定题生成/更新一个正式选项——追加在原
+  -- 选项之后（索引恒 q.n_base+1；已存在则原位更新文本、选中状态保持不变，
+  -- 编辑语义）；新建即选中：radio 排他换选（原选中取消）、checkbox 与已选并
+  -- 存勾选；空文本仅提示不关框；成功后焦点返回选项区、光标落在该自定义选项
+  local function commit_custom()
+    if closed or not is_form then
+      return
+    end
+    local k = input_q
+    if not questions[k] then
+      return
+    end
+    local text = ""
+    if input_popup.bufnr and vim.api.nvim_buf_is_valid(input_popup.bufnr) then
+      local lines = vim.api.nvim_buf_get_lines(input_popup.bufnr, 0, -1, false)
+      text = vim.trim(table.concat(lines, "\n"))
+    end
+    if text == "" then
+      utils.warn("自定义答案为空，输入内容后按回车生成选项")
+      return
+    end
+    local q = questions[k]
+    local idx = q.n_base + 1
+    local existed = custom_opt[k] ~= nil
+    custom_opt[k] = { text = text }
+    q.options[idx] = text -- 物化进选项表：渲染/compose 直接消费
+    drafts[k] = text -- 草稿与已提交内容对齐（再次 a 预填同一文本）
+    if not existed then
+      if q.multiple then
+        sel[k][idx] = true
+      else
+        sel[k] = { [idx] = true } -- radio：新建即选中，原选中取消
+      end
+    end
+    render()
+    local row = (q_opt_first_row[k] and q_opt_first_row[k][idx]) or q_first_row[k] or 1
+    leave_row[k] = row -- 后续 Tab 往返停在该自定义选项上
+    focus_options_row(row)
+  end
+
+  -- 可选项导航（form）：Tab/Shift-Tab 在选项首行之间快速跳（含 Enter 生成的
+  -- 自定义选项——与普通选项同权）——跨题连续，越过题干/desc/分割线/空行等
+  -- 非交互行；当前落在折行续行上视为该项，Tab 跳下一项首行；列表两端停住
+  -- 不环绕；j/k 保持默认逐行移动；fallback 态 Tab/S-Tab 转进输入行（只读
+  -- 题面无选项可跳）；loading 无键位
+  local function jump_item(dir)
+    if closed or not top_popup.winid or not vim.api.nvim_win_is_valid(top_popup.winid) then
+      return
+    end
+    local cur = vim.api.nvim_win_get_cursor(top_popup.winid)[1]
+    local items = {}
+    for _, rows in pairs(q_opt_first_row) do
+      for _, r in pairs(rows) do
+        items[#items + 1] = r
+      end
+    end
+    table.sort(items)
+    local target = nil
+    if dir > 0 then
+      for _, r in ipairs(items) do
+        if r > cur then
+          target = r
+          break
+        end
+      end
+    else
+      for i = #items, 1, -1 do
+        if items[i] < cur then
+          target = items[i]
+          break
+        end
+      end
+    end
+    if target then
+      pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { target, 0 })
     end
   end
 
@@ -1022,20 +1172,13 @@ local function start_ui(initial)
   end
 
   -- <Space>/x：作用于光标所在题——选项行切换（radio 恒一项、重复不反选；
-  -- checkbox 增删），✎ 行转进该题输入区，其余行 no-op
+  -- checkbox 增删；自定义选项同权），其余行（题头/desc/空行/分割线）no-op
   local function toggle_at_cursor()
     if not is_form then
       return
     end
     local m, row = meta_at_cursor()
-    if not m then
-      return
-    end
-    if m.kind == "pen" then
-      focus_input_for(m.q)
-      return
-    end
-    if m.kind ~= "option" then
+    if not m or m.kind ~= "option" then
       return
     end
     local q = questions[m.q]
@@ -1052,14 +1195,16 @@ local function start_ui(initial)
     pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
   end
 
-  -- <C-Enter> 提交：任意焦点可用；严格未答拦截——第一个「0 选中且自定义空」的
-  -- 题被点名（未作答（<label 或 第 k 题>）：<题干预览>）后弹窗保留，光标跳至
-  -- 该题首个选项（选项区有焦点时）
+  -- <C-Enter> 提交：任意焦点可用；严格未答拦截——第一个「0 选中」的题被点名
+  -- （未作答（<label 或 第 k 题>）：<题干预览>）后弹窗保留，光标跳至该题首个
+  -- 选项（选项区有焦点时）。form 提交恒 compose_questions(questions, answers,
+  -- {})：自定义已选项的文本已物化在 q.options 里，随选中索引自然进入逐行原文；
+  -- 输入行未 Enter 提交的草稿不计入答案（customs 参数在 form 路径恒空）
   local function submit()
     if closed or submitted then
       return
     end
-    flush_input() -- 输入行草稿归位当前绑定题
+    flush_input() -- 输入行草稿归位当前绑定题（保留，不进提交）
     local lines = vim.api.nvim_buf_get_lines(input_popup.bufnr, 0, -1, false)
     local custom = vim.trim(table.concat(lines, "\n"))
     if is_form then
@@ -1072,11 +1217,11 @@ local function start_ui(initial)
           local name = questions[k].label ~= "" and questions[k].label or ("第 " .. k .. " 题")
           utils.warn(string.format("未作答（%s）：%s", name, stem_preview(questions[k].question)))
           if focus == "options" and top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
-            local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_pen_row[k] or q_first_row[k] or 1
+            local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_first_row[k] or 1
             pcall(vim.api.nvim_set_current_win, top_popup.winid)
             pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
           end
-          render() -- ✎ 预览/已答计数刷新
+          render() -- 已答计数刷新
           return -- 弹窗保留，不提交
         end
       end
@@ -1091,7 +1236,7 @@ local function start_ui(initial)
       end
       submitted = true
       close()
-      on_submit_cb(M.compose_questions(questions, answers, customs)) -- 恰一次
+      on_submit_cb(M.compose_questions(questions, answers, {})) -- 恰一次
     else
       if custom == "" then
         utils.warn("Custom answer is empty")
@@ -1104,16 +1249,24 @@ local function start_ui(initial)
   end
 
   -- 完整表单键位表（open 直开与 morph 共用；同 lhs 重绑覆盖 loading 绑定）
-  local toggle_bound = false
+  local form_action_bound = false
+  local input_cr_bound = false
   local function bind_form_maps()
-    -- 选项区（normal）：Tab → 输入行（按光标所在题重绑定）；space/x 切换（x 与
-    -- Notes 视图一致；✎ 行上转进该题输入区）
+    -- 选项区（normal）：Tab/Shift-Tab 表单态 = 可选项快速跳转（选项首行，含
+    -- 自定义选项；见 jump_item）；fallback 态 = 进输入行（只读题面无选项可跳）；
+    -- space/x 切换（x 与 Notes 视图一致）；a = 唤起自定义输入（绑定光标所在题）
     top_popup:map("n", "<Tab>", function()
       if is_form then
-        local m = meta_at_cursor()
-        focus_input_for(m and m.q)
+        jump_item(1)
       else
-        focus_input_for(nil)
+        focus_input()
+      end
+    end, mapOpts)
+    top_popup:map("n", "<S-Tab>", function()
+      if is_form then
+        jump_item(-1)
+      else
+        focus_input()
       end
     end, mapOpts)
     top_popup:map("n", "<C-Enter>", submit, mapOpts)
@@ -1124,27 +1277,64 @@ local function start_ui(initial)
     if is_form then
       top_popup:map("n", "<Space>", toggle_at_cursor, mapOpts)
       top_popup:map("n", "x", toggle_at_cursor, mapOpts)
-      toggle_bound = true
-    elseif toggle_bound then
-      -- form → fallback 变身：space/x 是表单专属，确保解绑（键位表与直开 fallback 一致）
+      top_popup:map("n", "a", function()
+        open_custom_for(nil)
+      end, mapOpts)
+      -- j/k 不劫持：保持默认逐行移动（快速跳转由 Tab/S-Tab 承担）
+      form_action_bound = true
+    elseif form_action_bound then
+      -- form → fallback 变身：space/x/a 是表单专属，确保解绑（键位表与直开 fallback 一致）
       top_popup:unmap("n", "<Space>")
       top_popup:unmap("n", "x")
-      toggle_bound = false
+      top_popup:unmap("n", "a")
+      form_action_bound = false
     end
 
-    -- 输入行（normal+insert）：Tab → 回到绑定题的选项区；<C-Enter> 提交；Esc 轻
-    -- 交互直接取消（同内联输入缝隙 inline_input_gap 的插入模式 Esc 语义）
+    -- 输入行（normal+insert）：Enter = 提交自定义（生成/更新该题正式选项）；
+    -- Tab/S-Tab → 回到绑定题的选项区（草稿保留）；<C-Enter> 提交整个表单；
+    -- form 态 Esc 关输入框、保留草稿（回到选项区，误触不丢字），fallback 态
+    -- Esc 直接取消（同内联输入缝隙 inline_input_gap 的插入模式 Esc 语义）；
+    -- q/C-q 任意形态均整表取消（显式放弃，不保草稿）
     input_popup:map("n", "<Tab>", focus_options_for_input, mapOpts)
+    input_popup:map("n", "<S-Tab>", focus_options_for_input, mapOpts)
     input_popup:map("i", "<Tab>", function()
       if closed or not top_popup.winid or not vim.api.nvim_win_is_valid(top_popup.winid) then
         return
       end
       focus_options_for_input()
     end, mapOpts)
+    input_popup:map("i", "<S-Tab>", function()
+      if closed or not top_popup.winid or not vim.api.nvim_win_is_valid(top_popup.winid) then
+        return
+      end
+      focus_options_for_input()
+    end, mapOpts)
+    if is_form then
+      -- Enter = 提交自定义（form 专属；fallback 变身后解绑，Enter 不劫持）
+      input_popup:map("n", "<CR>", commit_custom, mapOpts)
+      input_popup:map("i", "<CR>", commit_custom, mapOpts)
+      input_cr_bound = true
+    elseif input_cr_bound then
+      input_popup:unmap("n", "<CR>")
+      input_popup:unmap("i", "<CR>")
+      input_cr_bound = false
+    end
     input_popup:map("n", "<C-Enter>", submit, mapOpts)
     input_popup:map("i", "<C-Enter>", submit, mapOpts)
-    input_popup:map("n", "<Esc>", close, mapOpts)
-    input_popup:map("i", "<Esc>", close, mapOpts)
+    input_popup:map("n", "<Esc>", function()
+      if is_form then
+        focus_options_for_input() -- 关输入框、保留草稿
+      else
+        close()
+      end
+    end, mapOpts)
+    input_popup:map("i", "<Esc>", function()
+      if is_form then
+        focus_options_for_input()
+      else
+        close()
+      end
+    end, mapOpts)
     input_popup:map("n", "q", close, mapOpts)
     input_popup:map("n", "<C-q>", close, mapOpts)
     input_popup:map("i", "<C-q>", close, mapOpts)
@@ -1157,7 +1347,7 @@ local function start_ui(initial)
     input_popup:map("i", "<Esc>", close, mapOpts)
   end
 
-  -- 初始光标/focus：form 落第一题建议项（无建议→首选项→✎ 行）；fallback 聚焦输入行
+  -- 初始光标/focus：form 落第一题建议项（无建议→首选项→节头）；fallback 聚焦输入行
   local function apply_initial_focus()
     if is_form then
       focus = "options"
@@ -1171,11 +1361,7 @@ local function start_ui(initial)
           end
         end
       end
-      local row = target
-        or (q_opt_first_row[1] and q_opt_first_row[1][1])
-        or q_pen_row[1]
-        or q_first_row[1]
-        or 1
+      local row = target or (q_opt_first_row[1] and q_opt_first_row[1][1]) or q_first_row[1] or 1
       pcall(vim.api.nvim_set_current_win, top_popup.winid)
       pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
       sync_focus_titles()
@@ -1186,8 +1372,9 @@ local function start_ui(initial)
 
   -- 原位变身（loading → form/fallback，或旧表单 → 新表单）：
   -- 1) 停 spinner；2) 重算 spec 状态（几何恒定：宽度/高度会话期一次定死，
-  --    不再调 layout:update——morph 只重渲染，零几何跳变）；3) 输入行清空并
-  --    恢复可写；4) 重绑完整表单键位；5) 重渲染行 + 初始光标/focus。
+  --    不再调 layout:update——morph 只重渲染，零几何跳变）；3) 输入行恢复
+  --    可写并按第 1 题预填（form→form 重问延续的自定义/草稿可见；全新题
+  --    为空）；4) 重绑完整表单键位；5) 重渲染行 + 初始光标/focus。
   --    同一 Layout/窗口 id 不卸载重挂——dim 遮罩挂输入 buffer 生命周期，
   --    全程存活不闪。
   local function morph(spec, on_submit)
@@ -1195,12 +1382,16 @@ local function start_ui(initial)
       return
     end
     stop_spinner()
+    flush_input() -- 变身前旧绑定题草稿归位（form→form 重问按题干延续可带走）
     apply_spec(spec, on_submit)
     mode = is_form and "form" or "fallback"
     local ib = input_popup.bufnr
     if ib and vim.api.nvim_buf_is_valid(ib) then
       vim.api.nvim_set_option_value("modifiable", true, { buf = ib })
-      vim.api.nvim_buf_set_lines(ib, 0, -1, false, { "" }) -- 重问场景不残留旧草稿
+      -- 重问：输入行回到第 1 题绑定 + 预填（延续的自定义/草稿可见；全新题为空）
+      local text = is_form and custom_prefill(1) or ""
+      local mlines = text == "" and { "" } or vim.split(text, "\n", { plain = true })
+      vim.api.nvim_buf_set_lines(ib, 0, -1, false, mlines)
     end
     bind_form_maps()
     if top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then

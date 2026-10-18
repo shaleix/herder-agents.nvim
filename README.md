@@ -143,13 +143,17 @@ late LLM result) and morphs in place into the form once extraction finishes:
    no resize on morph).
    Each question is its own section separated by `---` rules (the buffer is
    `filetype=markdown` with `buftype=nofile`: syntax highlighting applies,
-   markdown preview plugins don't attach). `space` toggles options (radio when
+   markdown preview plugins don't attach). `space` toggles options (green `✓`
+   when selected, no checkbox glyphs; radio when
    single-choice, checkbox when `multiple`; `suggested` items pre-selected and
-   get the initial cursor), every question has a `✎ custom answer` row that
-   rebinds the bottom input line to that question, `tab` moves between options
-   and input, `ctrl+enter` submits, `esc` cancels. A question with nothing
-   selected and no custom text blocks the submit. Submission is the selected
-   option texts verbatim plus custom lines — unlabeled for a single question,
+   get the initial cursor), `tab`/`shift-tab` jump between selectable items,
+   `a` opens the bottom input line to write a custom answer for the question
+   under the cursor (prefilled with its previous content; `enter` promotes it
+   to a real option of that question — appended after the originals and
+   selected, later edits update it in place; `esc` keeps the draft),
+   `ctrl+enter` submits, `esc` cancels. A question with nothing selected
+   blocks the submit. Submission is the selected option texts verbatim —
+   unlabeled for a single question,
    `Qk:` blocks separated by blank lines when there are several — sent back
    through the delivery **text channel** (a blocked agent refuses
    `herdr agent prompt`, so send-text + submit key is the only channel that
