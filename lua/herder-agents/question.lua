@@ -2,7 +2,8 @@
 --   :AIQuestion → panes.lookup 解析当前 tool 的 pane 目标（复用既有三级匹配）
 --   → `herdr agent read <pane> --lines N --format text` 捕获终端输出
 --   → llm.ask 提取标准问题 JSON（status + questions[] 多问题；每题
---     label/question/desc/options/multiple/suggested，extraction schema v2）
+--     label/question/desc/options/multiple/suggested，extraction schema v2；
+--     编号进 label 字段、question 不含自身的编号前缀）
 --   → 全程 open_loading 骨架承载阶段流（"capture" / "extract" / "read_more" / "retry"），
 --     完成后原位 morph_to 出表单（form / fallback 两态；esc 取消后句柄 QQC，
 --     迟到的 llm 回调一律静默丢弃 —— 不 morph_to、不 warn）
@@ -45,11 +46,13 @@ local function system_prompt(fail_note)
     '- status "complete": the excerpt contains one or more questions addressed to the user;',
     "  extract ALL of them (1..N) in order, one array item per question:",
     "  question = the question text copied verbatim, character-for-character —",
-    "  never remove, rewrite, or renumber anything (a question starting with",
-    '  "Q2 - ..." keeps that exact prefix), BUT it must NOT contain the option',
-    '  texts: when options are enumerated inline in the excerpt ("(a) ...',
-    '  (b) ...", "1) ... 2) ..."), move those texts into the options array',
-    "  instead of duplicating them inside question;",
+    "  but WITHOUT its own numbering prefix: that number moves into label (an",
+    '  excerpt "Q2 - 输入形态与双模式：…" becomes label "Q2" plus question',
+    '  "输入形态与双模式：…");',
+    "  apart from that one prefix, never remove, rewrite, or renumber anything,",
+    "  BUT it must NOT contain the option texts: when options are enumerated",
+    '  inline in the excerpt ("(a) ... (b) ...", "1) ... 2) ..."), move those',
+    "  texts into the options array instead of duplicating them inside question;",
     "  options = the selectable answers copied verbatim (>= 1), never altered —",
     '  KEEP each option\'s original label prefix exactly as written ("(a)",',
     '  "b)", "[1]", "1." ...): those labels identify the options to the agent,',
@@ -64,8 +67,9 @@ local function system_prompt(fail_note)
     '  the options array; a label mention like "(a)" inside the note stays',
     '  as-is); use "" when the excerpt has no recommendation note.',
     "  label = the question's own number in the excerpt, copied verbatim (\"Q2\",",
-    '  "3", "问题三" ...); use "" when the question carries no number — label is',
-    "  reply metadata only, never invent it and never move it into question;",
+    '  "3", "问题三" ...); use "" when the question carries no number — the',
+    "  number lives in label, never repeated inside question; label is reply",
+    "  metadata only, never invent it;",
     "  Never invent questions or options.",
     '- status "need_more": a question may exist but the excerpt is truncated or too short;',
     "  more terminal history is needed.",

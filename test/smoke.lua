@@ -2708,13 +2708,14 @@ form_specs = {}
 read_log = {}
 question_mod.ask()
 check(#read_log == 2 and read_log[1] == 80 and read_log[2] == 160, "need_more → --lines 翻倍重读（80 → 160）")
--- system_prompt 逐字语义（原始内容是唯一事实源）：question/options 均 verbatim
--- 复制、绝不剥离/改写 —— 字符串断言（含 verbatim 措辞、无任何剥离指示）
+-- system_prompt 语义（原始内容仍是唯一事实源）：编号进 label、question 不含自身
+-- 编号前缀、其余 verbatim 复制 —— 字符串断言（含 verbatim 措辞与编号前缀措辞）
 local qsys = adapter_log[1] and adapter_log[1].system or ""
 check(
   qsys:find("copied verbatim", 1, true) ~= nil
     and qsys:find("Never invent questions or options", 1, true) ~= nil
     and qsys:find("never remove, rewrite, or renumber", 1, true) ~= nil
+    and qsys:find("WITHOUT its own numbering prefix", 1, true) ~= nil
     and qsys:find("must NOT contain the option", 1, true) ~= nil
     and qsys:find("MAY use markdown syntax", 1, true) ~= nil
     and qsys:find("KEEP each option's original label prefix", 1, true) ~= nil
@@ -2722,7 +2723,7 @@ check(
     and qsys:find("do NOT analyze", 1, true) ~= nil
     and qsys:find("strip", 1, true) == nil
     and qsys:find("the form numbers questions", 1, true) == nil,
-  "system_prompt 逐字语义 + question 不含选项文本 + 保留 markdown 修饰"
+  "system_prompt 逐字语义 + question 不含自身编号前缀（编号进 label）+ 不含选项文本"
 )
 check(#form_specs == 1 and form_specs[1].mode == "form", "complete → form 表单")
 check(

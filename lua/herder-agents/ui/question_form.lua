@@ -49,13 +49,16 @@
 --   选项/原文/图例一律折行进固定宽度，宽度不再由内容反推——loading→form 变身
 --   前后宽度逐像素恒等，零跳变。
 --
--- 多问题分节视觉：每题一节（题干 + 选项 + desc 说明行 + ✎ 自定义行；desc 仅
--- 展示、Comment 压暗、绝不进入提交文本，为空时不产生任何额外行），节间一条
--- `---` 分割
--- 线（markdown 主题断行，叠 extmark 保证可见；N=1 无分割线）。原始内容是唯一
--- 事实源：题干逐字渲染（内容以 `Q2 - …` 开头就照显示），表单不自加任何 Qk
--- 标号行，每节直接以题干开头；题干与选项间空行、节间空行 + 分割线 + 空行防
--- setext；顶部标题体现「N 个问题（已答 a/N）」（计数不是前缀）。题面上框
+-- 多问题分节视觉：每节以 `## <标号>` 行开头（ATX 标题：markdown ft 语法高亮自
+-- 然生效，叠 HerderQFormQuestion 粗体 extmark；标号取该题 label，为空回退位置
+-- 序号 `Qk`，N=1 同样有节头），节头与题干之间不空行（ATX 标题无 setext 风险），
+-- 其后题干、空行、选项、✎ 自定义行、desc 说明行（desc 仅展示、Comment 压暗、
+-- 绝不进入提交文本，为空时不产生任何额外行），节间一条 `---` 分割线（markdown
+-- 主题断行，叠 extmark 保证可见；N=1 无分割线）。normalize_question 做防御性
+-- 前缀剥离：label 非空且 question 以 label 开头（system_prompt 已要求编号进
+-- label，这里兜底 LLM 漏剥）时剥掉这一处前导，label 为空不动——其余内容仍是
+-- 唯一事实源、逐字渲染。题干与选项间空行、节间空行 + 分割线 + 空行防 setext；
+-- 顶部标题体现「N 个问题（已答 a/N）」（计数不是前缀）。题面上框
 -- buffer filetype=markdown + buftype=nofile：语法高亮生效，
 -- 同时阻断 markview 等要求 buftype=="" 的 ft 插件 attach；续行缩进一律 ≤3
 -- 空格、分割线前留空行，避免 4 空格缩进代码块 / setext 标题等 markdown 误判。
@@ -90,7 +93,7 @@ local current_close = nil
 -- 选中/未选中沿用 Notes 勾选框的 String/LineNr 色系，保持插件内同一视觉语言
 local function ensure_highlights()
   local defs = {
-    HerderQFormQuestion = { bold = true }, -- ✎ 字形 / loading 文案 / 强调位
+    HerderQFormQuestion = { bold = true }, -- 节头 ## 行 / ✎ 字形 / loading 文案 / 强调位
     HerderQFormOn = { link = "String" }, -- 选中字形 / ✎ 预览 / spinner 帧
     HerderQFormOff = { link = "LineNr" }, -- 未选中字形 / 「自定义答案…」标签
     HerderQFormDivider = { link = "Comment" }, -- 节间 `---` 分割线
@@ -240,17 +243,32 @@ local function read_width_ratio()
 end
 
 -- 单题 spec 归一化：question/options 字符串化、suggested 越界过滤（保持传入顺序，
--- radio 初始选中取第一个有效建议）；question 原样保留（原始内容是唯一事实源，
--- 内容以 `Q2 - …` 开头就照显示，不做任何前缀剥离/改写；options 同样逐字不动）；
+-- radio 初始选中取第一个有效建议）；question 做防御性前缀剥离——label 非空且
+-- question 以 label 开头、后跟分隔符 [-–—:：.、)] 与空白时剥掉这一处前导
+-- （system_prompt 已要求编号进 label，这里兜底 LLM 漏剥；剥后为空则不剥；
+-- label 为空不动），其余逐字不改写；options 一律逐字不动；
 -- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示；
--- label 仅 tostring 归一（缺省 ""）——原始标号元数据，不渲染成行，只驱动提交
--- 块头 / 未答拦截提示 / 输入行标题
+-- label 仅 tostring 归一（缺省 ""）——原始标号元数据，驱动节头 `## <label>`、
+-- 提交块头 / 未答拦截提示 / 输入行标题
 local function normalize_question(q)
   q = type(q) == "table" and q or {}
+  local label = tostring(q.label or "")
+  local question = tostring(q.question or "")
+  -- 防御性剥离：question 以 label 开头、后跟分隔符/空白（如 "Q2 - foo"）时剥掉
+  -- 这一处前导（取最长分隔/空白 run 一起剥，避免回溯残留下一个分隔符）；
+  -- 剥后为空（题干就是标号本身）则不剥；label 为空不动
+  if label ~= "" and question:sub(1, #label) == label then
+    local rest = question:sub(#label + 1)
+    local run = rest:match("^[%s%-–—:：.、)]+")
+    local body = run and rest:sub(#run + 1) or nil
+    if body and body ~= "" then
+      question = body
+    end
+  end
   local item = {
-    question = tostring(q.question or ""),
+    question = question,
     desc = tostring(q.desc or ""),
-    label = tostring(q.label or ""),
+    label = label,
     options = {},
     multiple = q.multiple == true,
     suggested = {},
@@ -401,9 +419,9 @@ local function start_ui(initial)
   end
 
   -- 行模型：每行 { text, marks = { {起始字节, 结束字节, hl组} }, kind, q, opt }。
-  -- 题面文本（题干/fallback 原文）不再整行压 extmark——filetype=markdown 的语法
-  -- 高亮直接生效（代码块/加粗等与手工折行共存）；extmark 只用于结构性字形
-  -- （选项框/✎/分割线）。
+  -- 题面文本（节头/题干/fallback 原文）不再整行压 extmark——filetype=markdown 的
+  -- 语法高亮直接生效（ATX 节头/代码块/加粗等与手工折行共存）；extmark 只用于
+  -- 结构性字形（节头粗体/选项框/✎/分割线）。
   local function build_rows()
     local rows = {}
     local function add(text, marks, kind, q, opt)
@@ -413,16 +431,26 @@ local function start_ui(initial)
     if is_form then
       for k, q in ipairs(questions) do
         if k > 1 then
-          -- 空行隔开上一节 ✎ 行与分割线：避免 markdown 把「文本行 + 紧随 ---」
-          -- 误判为 setext 标题下划线；分割线自身是合法 --- 主题断行
+          -- 空行隔开上一节末行（✎/desc）与分割线：避免 markdown 把「文本行 +
+          -- 紧随 ---」误判为 setext 标题下划线；分割线自身是合法 --- 主题断行
           add("", {}, "blank", k, nil)
           add(string.rep("-", inner), { { 0, inner, "HerderQFormDivider" } }, "divider", k, nil)
         end
-        -- 每节直接以题干开头（原始内容唯一事实源，逐字渲染、无自加标号行）；
-        -- 折满 inner、续行平齐不缩进
-        if q.question ~= "" then
-          for _, seg in ipairs(wrap_dw(q.question, inner)) do
-            add(seg, {}, "header", k, nil)
+        -- 节头与题干同行：`## <标号> <题干首段>`（label 非空用原始标号，否则回退
+        -- 位置序号 Qk；N=1 同样有）。ATX 标题整行生效（markdown ft 语法高亮），
+        -- 「## 标号」前缀压 HerderQFormQuestion 粗体 extmark；题干首段折行预算
+        -- 扣除节头宽 + 连接空格，续行平齐不缩进；不参与 space 选择；题干为空
+        -- 则整行仅节头
+        local head_label = q.label ~= "" and q.label or ("Q" .. k)
+        local head = "## " .. head_label
+        if q.question == "" then
+          add(head, { { 0, #head, "HerderQFormQuestion" } }, "qhead", k, nil)
+        else
+          local budget = math.max(8, inner - dw(head) - 1)
+          local segs = wrap_dw(q.question, budget)
+          add(head .. " " .. segs[1], { { 0, #head, "HerderQFormQuestion" } }, "qhead", k, nil)
+          for si = 2, #segs do
+            add(segs[si], {}, "header", k, nil)
           end
         end
         add("", {}, "blank", k, nil) -- 题干与选项间空一行（防 setext、版式呼吸）
@@ -461,15 +489,6 @@ local function start_ui(initial)
             add(text, marks, "option", k, i)
           end
         end
-        -- desc 说明行（仅展示、不进提交文本）：渲染在选项之后、✎ 行之前；
-        -- Comment 压暗（与「· 建议」标记/图例同语系），折满 inner、续行平齐
-        -- 不缩进（与题干续行同策略）；不参与 space 选择（row_opt 为 nil）；
-        -- desc 为空 → 不产生任何额外行
-        if q.desc ~= "" then
-          for _, seg in ipairs(wrap_dw(q.desc, inner)) do
-            add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
-          end
-        end
         -- ✎ 自定义答案伪选项行（预览截断到内宽；已填时预览亮 String 色）
         local prefix = PEN_GLYPH .. " "
         local base = prefix .. PEN_LABEL
@@ -491,6 +510,15 @@ local function start_ui(initial)
           end
         end
         add(ptext, pmarks, "pen", k, nil)
+        -- desc 说明行（仅展示、不进提交文本）：渲染在 ✎ 行之后（节尾，建议/
+        -- 选项/自定义区之后收束说明）；Comment 压暗（与「· 建议」标记/图例同
+        -- 语系），折满 inner、续行平齐不缩进（与题干续行同策略）；不参与 space
+        -- 选择（row_opt 为 nil）；desc 为空 → 不产生任何额外行
+        if q.desc ~= "" then
+          for _, seg in ipairs(wrap_dw(q.desc, inner)) do
+            add(seg, { { 0, #seg, "Comment" } }, "desc", k, nil)
+          end
+        end
       end
     else
       for _, line in ipairs(vim.split(raw_text:gsub("\r", ""), "\n", { plain = true })) do
