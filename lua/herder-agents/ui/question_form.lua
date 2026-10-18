@@ -502,7 +502,7 @@ local function start_ui(initial)
           end
         end
         add("", {}, "blank", k, nil) -- 题干与选项间空一行（防 setext、版式呼吸）
-        local opt_w = math.max(4, inner - 4) -- 扣除字形/续行缩进 4 列
+        local opt_w = math.max(4, inner - 2) -- 扣除前缀 2 列（✓ / 空格占位）
         for i, o in ipairs(q.options) do
           local osegs = wrap_dw(o, opt_w)
           -- 建议标记贴文本末尾，放不下则独占一行（缩进对齐文本列）；字节区间供高亮
@@ -522,15 +522,16 @@ local function start_ui(initial)
             local text, marks, off
             if si == 1 then
               local on = sel[k][i] == true
-              local glyph = q.multiple and (on and "[x] " or "[ ] ") or (on and "(*) " or "( ) ")
+              -- 无框字形：选中 = 绿色 ✓ 前缀（✓ 3 字节），未选中 = 等宽空格占位
+              --（文字起点恒对齐、切换不横跳）；单选/多选同形，语义由标题栏表达；
+              -- 文字留给 markdown 语法高亮，未命中语法的落窗口 Normal（合成组）
+              local glyph = on and "✓ " or "  "
               text = glyph .. seg
               off = #glyph
-              -- 只着色字形；文字留给 markdown 语法高亮，未命中语法的部分落
-              -- 窗口 Normal（合成组，亮色）
-              marks = { { 0, #glyph, on and "HerderQFormOn" or "HerderQFormOff" } }
+              marks = on and { { 0, off - 1, "HerderQFormOn" } } or {}
             else
-              text = "   " .. seg -- 3 空格续行：避开 markdown 4 空格缩进代码块
-              off = 3
+              text = "  " .. seg -- 2 空格续行：与首段文字列对齐
+              off = 2
               marks = {}
             end
             if mrange and si == #osegs then
