@@ -165,6 +165,28 @@ options. With `status_poll` enabled, an agent turning `blocked` emits
 `AIAgentBlocked`, which surfaces a hint to run `:AIQuestion` (disable with
 `llm.hint = false`).
 
+**Auto trigger.** With `llm.auto_question = true`, the extraction runs by
+itself when the agent turns `blocked` or `done` — no `:AIQuestion` needed.
+It rides the same status polling as the hint: it requires
+`HERDR_ENV=1` plus `status_poll.enabled`, and only fires for the statuses
+listed in `llm.auto_question_states` (default `{ "blocked", "done" }`).
+Each trigger is quiet by design:
+
+- The pane output is pre-filtered locally before anything else happens — no
+  question markers (？ / ? / ❓ / `(a)` / `[1]` / `1.` / `选项` / `options` …)
+  means no loading popup and no LLM call at all.
+- If a question form / loading skeleton is already open (manual or a previous
+  auto round), the trigger is skipped.
+- When extraction returns `complete`, the agent's status is re-checked before
+  the form morphs in: back to `working` (or any non-trigger state) → the
+  skeleton closes silently. A failed re-check errs on the side of showing the
+  form.
+- `no_question`, extraction failures and exhausted read-more rounds just close
+  the skeleton — the auto path never opens a fallback form, never notifies,
+  never warns.
+
+The manual `:AIQuestion` / `:AIQuestionDev` behavior is unchanged.
+
 ```lua
 require("herder-agents").setup({
   llm = {
@@ -175,12 +197,36 @@ require("herder-agents").setup({
     max_read_more = 2, -- read-more rounds
     retries = 1,       -- invalid-JSON retries (failure reason attached)
     hint = true,       -- notify :AIQuestion on AIAgentBlocked
+    auto_question = false, -- auto-run the extraction on blocked/done (needs status_poll)
+    auto_question_states = { "blocked", "done" }, -- statuses that trigger it
     extra_body = nil, -- extra fields deep-merged into the request body last (wins over
                       -- built-ins), e.g. { enable_thinking = false } to turn off thinking
     extra_headers = nil, -- extra HTTP headers, e.g. { ["X-Tenant"] = "team-a" }
     disable_thinking = false, -- inject the vendor's thinking-off field per base_url
                               -- (ollama/deepseek/dashscope/openrouter/openai); unknown
                               -- endpoints are left untouched — use extra_body instead
+  },
+})
+```
+
+**on_show hook.** `question_form.on_show` fires once when the form content is
+on screen — both form and fallback modes count (loading doesn't, `space`
+re-renders don't, but each new display does, e.g. form→form re-asks). It runs
+after the initial cursor/focus is applied, so your adjustments land last;
+errors in the callback are warned and never break the form. The same payload
+is emitted afterwards as the `AIQuestionShown` User event:
+
+```lua
+require("herder-agents").setup({
+  question_form = {
+    -- ctx = { mode = "form"|"fallback", questions = {...},   -- normalized
+    --         win = question winid, buf = question bufnr,    -- winids are
+    --         input_win = input line winid,                  -- invalid after
+    --         input_buf = input line bufnr }                 -- the popup closes
+    -- extmarks you add in your own namespace survive the form's re-renders
+    on_show = function(ctx)
+      vim.wo[ctx.win].conceallevel = 0 -- show raw markdown instead of concealed
+    end,
   },
 })
 ```
@@ -254,6 +300,7 @@ User autocmds (payloads in `event.data`):
 | `AIPromptSent` | a prompt was delivered | tool, pane_id, submitted, queued |
 | `AIDeliveryFailed` | delivery failed / queue dropped | tool, pane_id, queued, reason |
 | `AIAgentWorking` / `AIAgentIdle` / `AIAgentBlocked` | agent status change (needs `status_poll.enabled = true`) | tool, pane_id, status, cwd |
+| `AIQuestionShown` | question form content is on screen (form and fallback; fires once per display — not while loading, not on option re-renders, again on form→form re-asks) | mode, questions, win, buf, input_win, input_buf |
 
 Example: react when the agent finishes (opt-in poller):
 

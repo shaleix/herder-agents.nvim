@@ -29,6 +29,20 @@
 --       handle.close() -- 幂等关闭（<Esc> 同源）；绝不触发任何回调
 --       handle.closed / handle.is_closed() -- 管线判断迟到结果丢弃用
 --     组件侧对迟到结果零回调：closed 后 set_stage/morph_to 均为 no-op
+--   显示完成回调 config.options.question_form.on_show（可选函数，读取惯例同
+--   height_ratio：config 缺失/字段缺失/非函数一律安全不触发）：
+--     form/fallback 题面「显示完成」后触发一次——open 直开与 morph_to 变身两
+--     条路径都算；每次新的显示触发一次（form→form 重问再触发）；loading 态不
+--     触发；space 切换等重渲染不重复触发。触发点在初始光标/focus 应用之后
+--     （用户调整最后落地）。on_show(ctx)：
+--       ctx = { mode = "form"|"fallback",       -- fallback 时 questions 为空表
+--               questions = {…},                -- 归一化后的题表
+--               win = 题面 winid, buf = 题面 bufnr,
+--               input_win = 输入行 winid, input_buf = 输入行 bufnr }
+--     回调抛错仅 utils.warn 附错误、不破坏表单；随后 utils.emit
+--     ("AIQuestionShown", ctx)（无论是否配置 on_show 事件都发，payload 同
+--     ctx）。winid 在弹窗关闭后即失效；用户自建 namespace 的 extmark 不受本
+--     组件重渲染影响（render 只清自有 ns）
 --   M.compose(options, selected, custom) → string
 --     纯函数：selected 为 1-based 索引数组、custom 为 string 或空；
 --     输出 = 选中项原文（按选项顺序）逐行 + 自定义行原样，无任何前缀/模板
@@ -92,8 +106,24 @@ local current_close = nil
 -- 本组件局部高亮（default=true 幂等定义，不改动 ui/common.lua）；
 -- 选中/未选中沿用 Notes 勾选框的 String/LineNr 色系，保持插件内同一视觉语言
 local function ensure_highlights()
+  -- 合成「浮窗底 + 常规前景」：脱离 winhighlight 对 Normal 的窗口级重映射——
+  -- 直接 link Normal 的组在该窗口内会被解析回浮窗灰（winhl 覆盖 Normal 本身），
+  -- 故用 NormalFloat.bg + Normal.fg 现算（每次打开重算，跟随 colorscheme）；
+  -- 取不到色（极端 headless/无色主题）则回落 NormalFloat 保底
+  local ok_f, f = pcall(vim.api.nvim_get_hl, 0, { name = "NormalFloat", link = false })
+  local ok_n, n = pcall(vim.api.nvim_get_hl, 0, { name = "Normal", link = false })
+  local composed = (ok_f and type(f) == "table" and f.bg) and { bg = f.bg } or {}
+  if ok_n and type(n) == "table" and n.fg then
+    composed.fg = n.fg
+  end
+  if next(composed) ~= nil then
+    vim.api.nvim_set_hl(0, "HerderQFormNormal", composed)
+  else
+    vim.api.nvim_set_hl(0, "HerderQFormNormal", { link = "NormalFloat", default = true })
+  end
   local defs = {
-    HerderQFormQuestion = { bold = true }, -- 节头 ## 行 / ✎ 字形 / loading 文案 / 强调位
+    HerderQFormQuestion = { link = "Title" }, -- 节头 ## 行 / ✎ 字形 / fallback 原文：主题标题色（多主题 bold+彩色）
+    HerderQFormText = { link = "HerderQFormNormal" }, -- 正文（题干/选项文字）：常规前景 + 浮窗底（合成组，见上）
     HerderQFormOn = { link = "String" }, -- 选中字形 / ✎ 预览 / spinner 帧
     HerderQFormOff = { link = "LineNr" }, -- 未选中字形 / 「自定义答案…」标签
     HerderQFormDivider = { link = "Comment" }, -- 节间 `---` 分割线
@@ -240,6 +270,20 @@ local function read_width_ratio()
     return config.options.question_form.width_ratio
   end
   return DEFAULT_WIDTH_RATIO
+end
+
+-- 显示完成回调：config.options.question_form.on_show（form/fallback 题面显示
+-- 完成后触发一次，ctx 形状见 start_ui 内 fire_shown 注释）；与 read_height_ratio
+-- 同构的惰性 require / 完整缺省回退链——config 缺失/字段缺失/非函数一律安全
+-- 回退 nil（不触发、不影响表单）
+local function read_on_show()
+  local ok, config = pcall(require, "herder-agents.config")
+  if ok and type(config) == "table" and type(config.options) == "table"
+    and type(config.options.question_form) == "table"
+    and type(config.options.question_form.on_show) == "function" then
+    return config.options.question_form.on_show
+  end
+  return nil
 end
 
 -- 单题 spec 归一化：question/options 字符串化、suggested 越界过滤（保持传入顺序，
@@ -431,10 +475,11 @@ local function start_ui(initial)
     if is_form then
       for k, q in ipairs(questions) do
         if k > 1 then
-          -- 空行隔开上一节末行（✎/desc）与分割线：避免 markdown 把「文本行 +
-          -- 紧随 ---」误判为 setext 标题下划线；分割线自身是合法 --- 主题断行
+          -- 空行对称包住分割线：上下各一空行（上方防「文本行 + 紧随 ---」被
+          -- markdown 误判 setext 标题下划线；下方让 --- 与下一节内容呼吸）
           add("", {}, "blank", k, nil)
           add(string.rep("-", inner), { { 0, inner, "HerderQFormDivider" } }, "divider", k, nil)
+          add("", {}, "blank", k, nil)
         end
         -- 节头与题干同行：`## <标号> <题干首段>`（label 非空用原始标号，否则回退
         -- 位置序号 Qk；N=1 同样有）。ATX 标题整行生效（markdown ft 语法高亮），
@@ -444,11 +489,14 @@ local function start_ui(initial)
         local head_label = q.label ~= "" and q.label or ("Q" .. k)
         local head = "## " .. head_label
         if q.question == "" then
-          add(head, { { 0, #head, "HerderQFormQuestion" } }, "qhead", k, nil)
+          add(head, { { 0, #head, "HerderQFormQuestion", 50 } }, "qhead", k, nil)
         else
           local budget = math.max(8, inner - dw(head) - 1)
           local segs = wrap_dw(q.question, budget)
-          add(head .. " " .. segs[1], { { 0, #head, "HerderQFormQuestion" } }, "qhead", k, nil)
+          -- 正文不加整行 extmark：窗口 Normal（合成组）已打底亮色，markdown
+          -- 语法/TS 高亮（**、`code`、标题…）直接可见；节头前缀仅作低优先级
+          --（50 < TS 常规 100）兜底——有语法高亮时让位，无 TS/syntax 环境保底
+          add(head .. " " .. segs[1], { { 0, #head, "HerderQFormQuestion", 50 } }, "qhead", k, nil)
           for si = 2, #segs do
             add(segs[si], {}, "header", k, nil)
           end
@@ -477,6 +525,8 @@ local function start_ui(initial)
               local glyph = q.multiple and (on and "[x] " or "[ ] ") or (on and "(*) " or "( ) ")
               text = glyph .. seg
               off = #glyph
+              -- 只着色字形；文字留给 markdown 语法高亮，未命中语法的部分落
+              -- 窗口 Normal（合成组，亮色）
               marks = { { 0, #glyph, on and "HerderQFormOn" or "HerderQFormOff" } }
             else
               text = "   " .. seg -- 3 空格续行：避开 markdown 4 空格缩进代码块
@@ -586,9 +636,12 @@ local function start_ui(initial)
   -- ── 常驻骨架：与表单同布局（top + input），loading 与 morph 共用；几何恒定 ──
   local top_enter = born_loading or is_form -- form：初始聚焦选项区；fallback：聚焦输入行；loading：聚焦 loading 区
 
-  -- 与 Chat/Notes 同款视觉：空格边框 + 悬浮标题 + NormalFloat 系背景。
+  -- 与 Chat/Notes 同款视觉：空格边框 + 悬浮标题；Normal 映射为合成组
+  -- HerderQFormNormal（NormalFloat 底 + Normal 前景，正文不落浮窗灰）。
   -- filetype=markdown 让题面拿到真语法高亮；buftype=nofile 阻断 markview 等
-  -- 要求 buftype=="" 的插件 attach；conceallevel=0 保证字形/分割线不被隐去
+  -- 要求 buftype=="" 的插件 attach；conceallevel=2（窗口局部）隐去 markdown
+  -- 记号（## / ** / `` 等），题面呈现渲染后效果（用户指定；字形/分割线是
+  -- 纯文本不受 conceal 影响）
   local top_popup = Popup({
     position = "50%",
     size = { width = width, height = fixed_rows },
@@ -607,10 +660,10 @@ local function start_ui(initial)
       modifiable = false,
     },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderQFormNormal,FloatBorder:AiderInputFloatBorder",
       cursorline = true, -- 焦点行高亮：选项区有焦点时可见，聚焦输入行时自然熄灭（loading 态显式关闭）
       wrap = false, -- 折行已在渲染时完成，禁止窗口二次折行错位
-      conceallevel = 0,
+      conceallevel = 2, -- 窗口局部：隐去 markdown 记号（##/**/``），渲染后观感
       fillchars = "eob: ", -- 固定高度下短内容以纯留白收尾，不显示 ~ 填充
     },
   })
@@ -631,7 +684,7 @@ local function start_ui(initial)
     },
     buf_options = { filetype = "herder-question-input" },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderQFormNormal,FloatBorder:AiderInputFloatBorder",
       wrap = false, -- 输入行横向滚动不折行（表单输入框惯例）
     },
   })
@@ -762,7 +815,13 @@ local function start_ui(initial)
     for i, r in ipairs(rows) do
       for _, m in ipairs(r.marks) do
         if m[2] > m[1] then
-          vim.api.nvim_buf_set_extmark(buf, ns, i - 1, m[1], { end_col = m[2], hl_group = m[3] })
+          -- m = { 起始字节, 结束字节, hl组, 优先级? }——优先级缺省为 nvim 默认；
+          -- 低优先级（如 50）让 markdown 语法/TS 高亮在其上生效，仅作无语法时的兜底
+          vim.api.nvim_buf_set_extmark(buf, ns, i - 1, m[1], {
+            end_col = m[2],
+            hl_group = m[3],
+            priority = m[4],
+          })
         end
       end
     end
@@ -927,6 +986,38 @@ local function start_ui(initial)
     if vim.api.nvim_get_mode().mode:match("^i") then
       vim.api.nvim_input("<C-[>")
     end
+  end
+
+  -- 显示完成回调收口：form/fallback 题面「显示完成」后触发一次——open 直开与
+  -- morph_to 变身两条路径都在初始光标/focus 应用之后调用本函数（该点即显示
+  -- 收口点：用户调整最后落地）；loading 态不触发；space 切换等重渲染不重复
+  -- 触发（render 不经过这里）；每次新的显示触发一次，form→form 重问再触发。
+  -- ctx 形状：
+  --   mode = "form"|"fallback"      -- 形态（fallback 时 questions 为空表）
+  --   questions = {…}               -- 归一化后的题表
+  --   win / buf                     -- 题面窗口/缓冲
+  --   input_win / input_buf         -- 自定义答案输入行窗口/缓冲
+  -- 注意：winid 在弹窗关闭后即失效（buf 仍在但已被组件置不可改）；用户自建
+  -- namespace 的 extmark 不受本组件重渲染影响（render 只清自有 ns）。on_show
+  -- 抛错仅 utils.warn 附错误、不破坏表单；随后 utils.emit("AIQuestionShown",
+  -- ctx)（无论是否配置 on_show 事件都发，payload 同 ctx）。
+  local function fire_shown()
+    local ctx = {
+      mode = is_form and "form" or "fallback",
+      questions = questions,
+      win = top_popup.winid,
+      buf = buf,
+      input_win = input_popup.winid,
+      input_buf = input_popup.bufnr,
+    }
+    local on_show = read_on_show()
+    if type(on_show) == "function" then
+      local ok, err = pcall(on_show, ctx)
+      if not ok then
+        utils.warn("question_form.on_show error: " .. tostring(err))
+      end
+    end
+    utils.emit("AIQuestionShown", ctx)
   end
 
   -- <Space>/x：作用于光标所在题——选项行切换（radio 恒一项、重复不反选；
@@ -1116,6 +1207,7 @@ local function start_ui(initial)
     end
     render()
     apply_initial_focus()
+    fire_shown() -- 显示收口：初始 focus 之后触发一次（form/fallback 都算）
   end
 
   if born_loading then
@@ -1145,6 +1237,7 @@ local function start_ui(initial)
   else
     render()
     apply_initial_focus()
+    fire_shown() -- 显示收口：直开 form/fallback，初始 focus 之后触发一次
   end
 
   -- 会话句柄：closed 经 __index 实时读取；morph 后委托当前表单的 close/closed

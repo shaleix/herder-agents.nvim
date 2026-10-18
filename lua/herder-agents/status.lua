@@ -3,7 +3,7 @@
 --
 -- 单次 `herdr agent list`（每 tick 一个子进程）轮询 herdr 已注册的 agent，
 -- 按 pane_id 跟踪 agent_status 变化并发出事件：
---   AIAgentWorking / AIAgentIdle / AIAgentBlocked
+--   AIAgentWorking / AIAgentIdle / AIAgentBlocked / AIAgentDone
 --   payload（event.data）= { tool = agent kind, pane_id, status, cwd }
 -- 默认限定当前 workspace（HERDR_WORKSPACE_ID，与 herdr-nvim agents.lua 同约定），
 -- 未设置时不过滤。可用于 "agent 完成 → 自动 format / lint / 关 pane" 之类的自动化。
@@ -22,6 +22,7 @@ local event_for = {
   working = "AIAgentWorking",
   idle = "AIAgentIdle",
   blocked = "AIAgentBlocked",
+  done = "AIAgentDone",
 }
 
 local function tick()

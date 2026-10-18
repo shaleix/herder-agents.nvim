@@ -509,30 +509,34 @@ local saved_ws = vim.env.HERDR_WORKSPACE_ID
 vim.env.HERDR_WORKSPACE_ID = "w-test"
 local status_events = {}
 vim.api.nvim_create_autocmd("User", {
-  pattern = { "AIAgentWorking", "AIAgentIdle", "AIAgentBlocked" },
+  pattern = { "AIAgentWorking", "AIAgentIdle", "AIAgentBlocked", "AIAgentDone" },
   callback = function(event)
     table.insert(status_events, { match = event.match, data = event.data })
   end,
 })
-fake_agents = { ["s1"] = "working", ["s2"] = "idle", ["s3"] = "unknown" }
+fake_agents = { ["s1"] = "working", ["s2"] = "idle", ["s3"] = "unknown", ["s4"] = "done" }
 status_mod._tick()
-check(#status_events == 2, "agent list 轮询发出 idle/working 事件（unknown 不发）")
-local saw_working, saw_cwd = false, false
+check(#status_events == 3, "agent list 轮询发出 idle/working/done 事件（unknown 不发）")
+local saw_working, saw_cwd, saw_done = false, false, false
 for _, ev in ipairs(status_events) do
   if ev.match == "AIAgentWorking" and ev.data.pane_id == "s1" then
     saw_working = true
+  end
+  if ev.match == "AIAgentDone" and ev.data.pane_id == "s4" then
+    saw_done = true
   end
   if ev.data.cwd == "/tmp" then
     saw_cwd = true
   end
 end
 check(saw_working, "AIAgentWorking 事件 payload 正确")
+check(saw_done, "AIAgentDone 事件已发出（done 状态映射，payload 形状一致）")
 check(saw_cwd, "事件 payload 含 agent cwd")
 status_mod._tick()
-check(#status_events == 2, "状态未变不重复发事件")
+check(#status_events == 3, "状态未变不重复发事件")
 fake_agents["s2"] = "working"
 status_mod._tick()
-check(#status_events == 3 and status_events[3].match == "AIAgentWorking", "状态变化发出新事件")
+check(#status_events == 4 and status_events[4].match == "AIAgentWorking", "状态变化发出新事件")
 fake_agents = { ["s-other"] = "working" }
 fake_ws = "w-other"
 status_events = {}
@@ -3278,6 +3282,175 @@ check(
 )
 check(#form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Buf?", "无参数 buffer 全真管线 → form 表单")
 vim.cmd("enew!")
+
+-- ---------------------------------------------------------------------------
+-- 8) auto 触发（llm.auto_question）：事件路由 → 预过滤 → 静默编排 → morph 前复查
+-- ---------------------------------------------------------------------------
+check(type(question_mod.looks_like_question) == "function", "looks_like_question 已导出")
+check(
+  question_mod.looks_like_question("Proceed? (a) yes (b) no")
+    and question_mod.looks_like_question("继续吗？请选择")
+    and question_mod.looks_like_question("pick one: [1] yes [2] no")
+    and question_mod.looks_like_question("1. Docker 2. bare metal")
+    and question_mod.looks_like_question("请选择选项")
+    and question_mod.looks_like_question("options: a / b")
+    and question_mod.looks_like_question("(A) allow (B) deny")
+    and question_mod.looks_like_question("需要确认❓"),
+  "looks_like_question 正例：？/?/❓/(a)/(A)/[1]/1./选项/options 各特征命中"
+)
+check(
+  not question_mod.looks_like_question("Building project... done in 3s")
+    and not question_mod.looks_like_question("All checks passed\nWrote 5 files")
+    and not question_mod.looks_like_question(""),
+  "looks_like_question 负例：纯构建/进度日志不命中"
+)
+check(
+  vim.deep_equal(cfg.options.llm.auto_question_states, { "blocked", "done" })
+    and cfg.options.llm.auto_question == false,
+  "llm.auto_question 默认关、auto_question_states 默认 blocked+done"
+)
+
+-- 前置：此前手动/dev 用例遗留的表单句柄统一置 closed，让 auto_check 的
+-- 防叠窗守卫从干净状态开始（记录最近 handle 的模块级变量即可通过入口检查）
+for _, h in ipairs(loading_handles) do
+  h.closed = true
+end
+cfg.options.llm.auto_question = true
+form_specs, stage_log, loading_handles = {}, {}, {}
+local ac_lc = loading_calls
+local ac_adapter = #adapter_log
+local ac_rl = #read_log
+local saved_warn_q = utils.warn
+local q_warns = {}
+utils.warn = function(msg)
+  table.insert(q_warns, tostring(msg))
+end
+local close_last_handle = function()
+  local h = loading_handles[#loading_handles]
+  if h then
+    h.closed = true
+  end
+end
+
+-- 8a) 预过滤不通过：无 loading、无 LLM 调用、完全静默
+read_pages = { "Build finished successfully. All 42 checks green in 3s" }
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(loading_calls == ac_lc, "auto 预过滤不通过 → 不弹 loading 骨架")
+check(#adapter_log == ac_adapter, "auto 预过滤不通过 → 不调 LLM")
+check(#read_log == ac_rl + 1, "auto 预过滤：先本地捕获 pane 输出（恰一次 read）")
+check(#q_warns == 0 and #form_specs == 0, "auto 预过滤不通过 → 完全静默（无 warn 无表单）")
+ac_rl = #read_log
+
+-- 8b) 预过滤通过 → 提取 complete → morph 前复查仍 blocked → morph form
+script = { { status = "complete", questions = { { question = "Auto?", options = { "y", "n" }, multiple = false } } } }
+qa_agents = { qa1 = "blocked" }
+form_specs = {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(loading_calls == ac_lc + 1, "auto_check 通过预过滤后开 loading（恰一次）")
+check(
+  #read_log == ac_rl + 2, -- 预过滤捕获 1 次 + 编排入口 capture 阶段再捕获 1 次
+  "auto_check 捕获该 pane 输出（预过滤 + 编排 capture 各一次 herdr agent read）"
+)
+check(
+  #form_specs == 1 and form_specs[1].mode == "form" and form_specs[1].questions[1].question == "Auto?",
+  "auto complete → morph form 表单"
+)
+close_last_handle() -- 收口本用例的表单句柄（防叠窗守卫按 closed 判定）
+ac_lc = loading_calls
+
+-- 8c) no_question → 骨架被关、无 morph、无 fallback、无 warn（完全静默）
+script = { { status = "no_question" } }
+form_specs = {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(loading_calls == ac_lc + 1, "auto no_question 路径同样先开 loading 骨架")
+check(#form_specs == 0, "auto no_question → 不 morph、不弹 fallback 表单")
+check(loading_handles[#loading_handles].closed, "auto no_question → 骨架被静默关闭")
+check(#q_warns == 0, "auto no_question → 无 warn（stub utils.warn 计数为零）")
+ac_lc = loading_calls
+
+-- 8d) 提取失败耗尽重试 → 完全静默（关骨架，无 fallback 无 warn）
+script = { "http 500", "still failing" }
+form_specs = {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(#form_specs == 0 and loading_handles[#loading_handles].closed, "auto 提取失败耗尽 → 静默关骨架（无 fallback 表单）")
+check(#q_warns == 0, "auto 提取失败 → 无 warn")
+ac_lc = loading_calls
+
+-- 8e) 上一个 handle 未 closed（表单/loading 还开着）→ auto_check 跳过
+local held_auto_cb
+llm.set_adapter(function(opts, cb)
+  held_auto_cb = cb -- 挂起回调：模拟表单开着期间（提取未收尾）的下一次触发
+end)
+form_specs, loading_handles = {}, {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(loading_calls == ac_lc + 1 and loading_handles[1] and not loading_handles[1].closed, "跳过用例前置：auto 骨架开着未关")
+local ac_adapter_held = #adapter_log
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "done")
+check(loading_calls == ac_lc + 1, "上一个 handle 未 closed → auto_check 跳过（done 触发同样拦下）")
+check(#adapter_log == ac_adapter_held, "跳过路径不调 LLM（入口守卫在捕获之前）")
+loading_handles[1].closed = true -- 收场（closed 句柄上迟到回调应被静默丢弃）
+held_auto_cb({ status = "complete", questions = { { question = "Q", options = { "a" }, multiple = false } } }, nil)
+check(#form_specs == 0, "closed 句柄上 auto 的迟到回调静默丢弃")
+llm.set_adapter(script_adapter)
+ac_lc = loading_calls
+
+-- 8f) morph 前复查：pane 已回 working → 静默关骨架不弹
+script = { { status = "complete", questions = { { question = "Late?", options = { "a" }, multiple = false } } } }
+qa_agents = { qa1 = "working" }
+form_specs = {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(loading_calls == ac_lc + 1, "复查用例：编排照常开 loading")
+check(#form_specs == 0 and loading_handles[#loading_handles].closed, "morph 前复查回 working → 静默关骨架不弹")
+check(#q_warns == 0, "复查不通过静默收场（无 warn）")
+ac_lc = loading_calls
+
+-- 8g) 复查 exec 失败（agent list 挂了）→ 按仍在触发集处理（宁可多弹一次）
+utils.set_exec(function(argv)
+  if argv[2] == "agent" and argv[3] == "list" then
+    return { code = 1, stdout = "", stderr = "list boom" }
+  end
+  return qa_exec(argv)
+end)
+qa_agents = { qa1 = "blocked" }
+script = { { status = "complete", questions = { { question = "Risky?", options = { "a" }, multiple = false } } } }
+form_specs = {}
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "blocked")
+check(#form_specs == 1 and form_specs[1].mode == "form", "复查失败（exec 错）→ 按仍在触发集处理，照常 morph form")
+utils.set_exec(qa_exec)
+close_last_handle()
+ac_lc = loading_calls
+
+-- 8h) 状态集过滤：auto_question_states 之外的状态不触发
+local al_before_states = #adapter_log
+question_mod.auto_check({ pane_id = "qa1", tool = "qa" }, "working")
+check(loading_calls == ac_lc and #adapter_log == al_before_states, "auto_question_states 之外的状态（working）不触发")
+
+-- 8i) auto_question=false → 仅 blocked 走原 hint（done 无 hint、无提取）
+cfg.options.llm.auto_question = false
+cfg.options.llm.hint = true -- 上文 6) 用例把 hint 置 false 后未复原，这里显式开回
+local ac_notified = {}
+local qa_saved_notify_auto = vim.notify
+vim.notify = function(msg)
+  table.insert(ac_notified, tostring(msg))
+end
+question_mod.on_agent_state({ tool = "opencode", pane_id = "p9" }, "AIAgentBlocked")
+check(#ac_notified == 1 and ac_notified[1]:find(":AIQuestion", 1, true) ~= nil, "auto off + blocked → 原 notify hint 不变")
+question_mod.on_agent_state({ tool = "opencode", pane_id = "p9" }, "AIAgentDone")
+check(#ac_notified == 1 and loading_calls == ac_lc, "auto off + done → 无 hint、不触发提取（骨架数不变）")
+vim.notify = qa_saved_notify_auto
+
+-- 8j) AIAgentDone 订阅存在 + 全链路：emit 事件 → 自动提取 → morph form
+cfg.options.llm.auto_question = true
+local ok_ac, done_autocmds = pcall(vim.api.nvim_get_autocmds, { event = "User", pattern = "AIAgentDone" })
+check(ok_ac and type(done_autocmds) == "table" and #done_autocmds > 0, "init.setup 订阅 AIAgentDone User 事件")
+qa_agents = { qa1 = "done" } -- 复查时 done ∈ 触发集 → 放行
+script = { { status = "complete", questions = { { question = "Done?", options = { "ok" }, multiple = false } } } }
+form_specs = {}
+utils.emit("AIAgentDone", { tool = "qa", pane_id = "qa1", status = "done", cwd = "/tmp" })
+check(#form_specs == 1 and form_specs[1].mode == "form", "AIAgentDone 事件全链路：轮询状态 → 事件 → auto 提取 → morph form")
+close_last_handle()
+
+utils.warn = saved_warn_q
 
 -- 还原本节注入与配置
 llm.set_adapter(nil)

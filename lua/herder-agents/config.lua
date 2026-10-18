@@ -235,6 +235,13 @@ M.defaults = {
     max_read_more = 2, -- read-more loop 轮数上限（need_more → 翻倍重读重提）
     retries = 1, -- 无效 JSON / HTTP 失败的重试次数（重试附上次失败原因）
     hint = true, -- agent blocked 时提醒 :AIQuestion（订阅 AIAgentBlocked 事件）
+    -- blocked/done 自动触发提问提取：status 轮询发现 agent 进入 auto_question_states
+    -- → AIAgentBlocked / AIAgentDone 事件 → question.auto_check（本地预过滤 +
+    -- 与手动相同的提取编排，失败/无问题全程静默）。默认关；依赖 status_poll
+    -- 轮询开启（HERDR_ENV=1 + status_poll.enabled），轮询不开则事件不会产生
+    auto_question = false,
+    -- 触发 auto 提取的 agent 状态集（事件到达后按此集过滤，集外状态忽略）
+    auto_question_states = { "blocked", "done" },
     adapter = nil, -- 自定义提取通道：fun(opts, cb)，opts 见 llm.lua（测试注入 / 社区 adapter）
     -- 请求定制（语义仿 neogit ai_commit 的 extra_body / extra_headers / disable_thinking）
     extra_body = nil, -- 追加字段：最后 force 深合并进 chat/completions 请求体、覆盖一切内置字段
@@ -249,7 +256,21 @@ M.defaults = {
   -- agent 提问表单弹窗尺寸（ui/question_form.lua 读取）：固定高度 = 编辑器行数 ×
   -- height_ratio、固定宽度 = 编辑器列数 × width_ratio（收敛到 [56, 88]），
   -- 全形态同尺寸、morph 零几何跳变；缺失时 UI 自带 0.6 / 0.7 缺省
-  question_form = { height_ratio = 0.6, width_ratio = 0.7 },
+  -- on_show = fun(ctx)：题面「显示完成」回调——form/fallback 都算（loading 态
+  -- 不触发；每次新的显示触发一次，form→form 重问再触发；space 切换等重渲染
+  -- 不重复触发；触发点在初始光标/focus 应用之后）：
+  --   ctx = { mode = "form"|"fallback",   -- 形态（fallback 时 questions 为空表）
+  --           questions = {…},            -- 归一化后的题表
+  --           win = 题面 winid,           -- 关窗后失效
+  --           buf = 题面 bufnr,
+  --           input_win = 输入行 winid,   -- 关窗后失效
+  --           input_buf = 输入行 bufnr }
+  --   winid 关窗后失效；用户自建 namespace 的 extmark 不受组件重渲染影响
+  --   （组件只清自有 ns）。典型用途：改 winhighlight / conceallevel / 加自定义
+  --   extmark，例如
+  --     on_show = function(ctx) vim.wo[ctx.win].conceallevel = 0 end
+  --   回调抛错仅 warn、不影响表单；随后发 User "AIQuestionShown"（data 同 ctx）
+  question_form = { height_ratio = 0.6, width_ratio = 0.7, on_show = nil },
 
   -- 发送给 agent 的选区上下文上限（借鉴 codex.nvim：超限拒绝而非静默截断）
   context = {
