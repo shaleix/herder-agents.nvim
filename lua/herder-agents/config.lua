@@ -234,14 +234,6 @@ M.defaults = {
     start_lines = 80, -- 首次捕获的终端行数（need_more 时翻倍重读）
     max_read_more = 2, -- read-more loop 轮数上限（need_more → 翻倍重读重提）
     retries = 1, -- 无效 JSON / HTTP 失败的重试次数（重试附上次失败原因）
-    hint = true, -- agent blocked 时提醒 :AIQuestion（订阅 AIAgentBlocked 事件）
-    -- blocked/done 自动触发提问提取：status 轮询发现 agent 进入 auto_question_states
-    -- → AIAgentBlocked / AIAgentDone 事件 → question.auto_check（本地预过滤 +
-    -- 与手动相同的提取编排，失败/无问题全程静默）。默认关；依赖 status_poll
-    -- 轮询开启（HERDR_ENV=1 + status_poll.enabled），轮询不开则事件不会产生
-    auto_question = false,
-    -- 触发 auto 提取的 agent 状态集（事件到达后按此集过滤，集外状态忽略）
-    auto_question_states = { "blocked", "done" },
     adapter = nil, -- 自定义提取通道：fun(opts, cb)，opts 见 llm.lua（测试注入 / 社区 adapter）
     -- 请求定制（语义仿 neogit ai_commit 的 extra_body / extra_headers / disable_thinking）
     extra_body = nil, -- 追加字段：最后 force 深合并进 chat/completions 请求体、覆盖一切内置字段

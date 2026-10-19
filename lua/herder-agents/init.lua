@@ -50,17 +50,6 @@ function M.setup(opts)
   setup_commands()
   setup_keymaps()
 
-  -- agent 提问入口（订阅 status.lua 轮询发出的 User 事件，不新建轮询；
-  -- status_poll 未开启时事件不会出现，零开销）：
-  --   llm.auto_question 开 → blocked/done 自动跑提问提取（question.auto_check，
-  --   全程静默语义）；关 → 仅 blocked 走原 notify hint（llm.hint 可关，done 无 hint）
-  vim.api.nvim_create_autocmd("User", {
-    pattern = { "AIAgentBlocked", "AIAgentDone" },
-    callback = function(ev)
-      require("herder-agents.question").on_agent_state(ev.data or {}, ev.match)
-    end,
-  })
-
   -- agent 状态轮询（默认关闭）：开启后发出 AIAgentWorking/Idle/Blocked User 事件
   local poll = config.options.status_poll
   if poll and poll.enabled and vim.env.HERDR_ENV == "1" then

@@ -165,31 +165,7 @@ late LLM result) and morphs in place into the form once extraction finishes:
 The LLM call is a small adapter (`llm.lua`, ADR-0002): built-in OpenAI-compatible
 HTTP via curl, DeepSeek out of the box (`DEEPSEEK_API_KEY`), no LLM plugin
 dependency; override the endpoint/model or plug a custom adapter via `llm.*`
-options. With `status_poll` enabled, an agent turning `blocked` emits
-`AIAgentBlocked`, which surfaces a hint to run `:AIQuestion` (disable with
-`llm.hint = false`).
-
-**Auto trigger.** With `llm.auto_question = true`, the extraction runs by
-itself when the agent turns `blocked` or `done` — no `:AIQuestion` needed.
-It rides the same status polling as the hint: it requires
-`HERDR_ENV=1` plus `status_poll.enabled`, and only fires for the statuses
-listed in `llm.auto_question_states` (default `{ "blocked", "done" }`).
-Each trigger is quiet by design:
-
-- The pane output is pre-filtered locally before anything else happens — no
-  question markers (？ / ? / ❓ / `(a)` / `[1]` / `1.` / `选项` / `options` …)
-  means no loading popup and no LLM call at all.
-- If a question form / loading skeleton is already open (manual or a previous
-  auto round), the trigger is skipped.
-- When extraction returns `complete`, the agent's status is re-checked before
-  the form morphs in: back to `working` (or any non-trigger state) → the
-  skeleton closes silently. A failed re-check errs on the side of showing the
-  form.
-- `no_question`, extraction failures and exhausted read-more rounds just close
-  the skeleton — the auto path never opens a fallback form, never notifies,
-  never warns.
-
-The manual `:AIQuestion` / `:AIQuestionDev` behavior is unchanged.
+options.
 
 ```lua
 require("herder-agents").setup({
@@ -200,9 +176,6 @@ require("herder-agents").setup({
     start_lines = 80,  -- first capture; doubled on need_more
     max_read_more = 2, -- read-more rounds
     retries = 1,       -- invalid-JSON retries (failure reason attached)
-    hint = true,       -- notify :AIQuestion on AIAgentBlocked
-    auto_question = false, -- auto-run the extraction on blocked/done (needs status_poll)
-    auto_question_states = { "blocked", "done" }, -- statuses that trigger it
     extra_body = nil, -- extra fields deep-merged into the request body last (wins over
                       -- built-ins), e.g. { enable_thinking = false } to turn off thinking
     extra_headers = nil, -- extra HTTP headers, e.g. { ["X-Tenant"] = "team-a" }
