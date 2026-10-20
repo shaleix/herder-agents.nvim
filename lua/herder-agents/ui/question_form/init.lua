@@ -1,6 +1,13 @@
 -- Agent 提问表单弹窗（pipeline: ui/question.lua 按契约调用；纯展示组件，
 -- 不触碰 delivery/herdr/config，提交一律经 on_submit 交回管线）
 --
+-- 模块结构（目录模块，外部契约不变）：
+--   ui/question_form/init.lua（本文件）—— nui 弹窗 shell：Popup/Layout 骨架、
+--     render/render_loading、焦点与键位、spinner、morph、handle 契约、会话几何
+--   ui/question_form/state.lua —— 作答状态机（纯函数集、表进表出、require 零
+--     副作用）：normalize_question、spec 解析 + form→form 延续匹配、toggle、
+--     set_custom、unanswered、compose/compose_questions（提交文本组装）
+--
 -- 模块契约（签名不可偏离）：
 --   M.open(spec, on_submit) → handle
 --     spec = { mode="form", questions = { { label=string, question=string,
@@ -29,8 +36,8 @@
 --       handle.close() -- 幂等关闭（<Esc> 同源）；绝不触发任何回调
 --       handle.closed / handle.is_closed() -- 管线判断迟到结果丢弃用
 --     组件侧对迟到结果零回调：closed 后 set_stage/morph_to 均为 no-op
---   显示完成回调 config.options.question_form.on_show（可选函数，读取惯例同
---   height_ratio：config 缺失/字段缺失/非函数一律安全不触发）：
+--   显示完成回调 config.options.question_form.on_show（可选函数；config 默认值
+--   深合并保证 question_form 表恒存在，未配置即 nil、不触发）：
 --     form/fallback 题面「显示完成」后触发一次——open 直开与 morph_to 变身两
 --     条路径都算；每次新的显示触发一次（form→form 重问再触发）；loading 态不
 --     触发；space 切换等重渲染不重复触发。触发点在初始光标/focus 应用之后
@@ -43,22 +50,15 @@
 --     ("AIQuestionShown", ctx)（无论是否配置 on_show 事件都发，payload 同
 --     ctx）。winid 在弹窗关闭后即失效；用户自建 namespace 的 extmark 不受本
 --     组件重渲染影响（render 只清自有 ns）
---   M.compose(options, selected, custom) → string
---     纯函数：selected 为 1-based 索引数组、custom 为 string 或空；
---     输出 = 选中项原文（按选项顺序）逐行 + 自定义行原样，无任何前缀/模板
---   M.compose_questions(questions, answers, customs) → string
---     纯函数：answers[k]/customs[k] 为第 k 题的选中索引数组/自定义文本；
---     N=1 输出与 M.compose(q1.options, answers[1], customs[1]) 完全一致（原文
---     逐行 + 自定义行，无前缀——该题带 label 也不例外）；N>1 每题一块：块头 =
---     （该题 label 非空用原始标号，否则回退数组位置 `Qk`）.. ":"，其后选中项
---     原文逐行 + 非空自定义行，块间空行，无尾随空行
+--   提交文本组装 compose/compose_questions 收口 state.lua（纯函数直测；本文件
+--   不再导出）
 --
 -- 固定几何（高度与宽度都会话期一次定死，loading/form/fallback/多题全程一致，
 -- morph 只重渲染行、不调任何几何）：
---   弹窗总高 = 编辑器行数 × config.options.question_form.height_ratio（缺省回退
---   0.6，config 未就绪/字段缺失均可安全降级）；内容不足留白（loading 垂直居中），
---   超出靠 j/k/G 滚动。
---   弹窗宽度 = clamp_popup_width(编辑器列数 × width_ratio)（缺省回退 0.7）再
+--   弹窗总高 = 编辑器行数 × config.options.question_form.height_ratio（默认
+--   0.6 见 config.defaults，setup 深合并保证字段存在，直接读取）；内容不足留白
+--  （loading 垂直居中），超出靠 j/k/G 滚动。
+--   弹窗宽度 = clamp_popup_width(编辑器列数 × width_ratio)（默认 0.7）再
 --   收敛到 [56, 88]（下限保持既有最小体量，上限沿用「一屏内聚焦」）；题头/
 --   选项/原文/图例一律折行进固定宽度，宽度不再由内容反推——loading→form 变身
 --   前后宽度逐像素恒等，零跳变。
@@ -112,9 +112,13 @@
 -- 重复防护：沿用 current_close 惯例——open/open_loading/morph 后的弹窗同属一个
 -- 会话，重复 open/open_loading 时旧弹窗（含 loading 骨架）让位关闭且不回调。
 --
--- 模块 require 零副作用：nui 等依赖延迟到 open 内 require，headless 环境可直接
--- require 断言 M.compose/M.compose_questions，弹窗仅在 M.open/M.open_loading 创建。
+-- 模块 require 零副作用：nui/config 等依赖延迟到 open 内 require（state.lua 纯
+-- 函数本身零依赖、可 headless 直测），弹窗仅在 M.open/M.open_loading 创建。
 local M = {}
+
+-- 作答状态机（纯函数集）：normalize / spec 解析+延续匹配 / toggle / set_custom /
+-- unanswered / compose 全部收口 state.lua（headless 可直接 require 断言）
+local state = require("herder-agents.ui.question_form.state")
 
 local mapOpts = { noremap = true }
 
@@ -197,50 +201,6 @@ local function wrap_dw(text, maxw)
   return out
 end
 
--- 组装提交文本（单题语义，保留供 fallback/内部复用）：选中项（按选项顺序稳定
--- 输出，与 selected 传入顺序无关）逐行 + 自定义行原样（空串视为无自定义行）。
--- 纯函数：仅字符串拼接，无任何 vim/nui 调用
-function M.compose(options, selected, custom)
-  local picked = {}
-  for _, i in ipairs(selected or {}) do
-    picked[i] = true
-  end
-  local out = {}
-  for i, opt in ipairs(options or {}) do
-    if picked[i] then
-      out[#out + 1] = type(opt) == "string" and opt or tostring(opt)
-    end
-  end
-  if type(custom) == "string" and custom ~= "" then
-    out[#out + 1] = custom
-  end
-  return table.concat(out, "\n")
-end
-
--- 组装多题提交文本（纯函数）：
---   N=1 与 M.compose(q1.options, answers[1], customs[1]) 完全一致（无前缀，
---   带 label 也不例外）；N>1 每题一块：块头 =（label 非空用原始标号，否则回退
---   数组位置 "Qk"）.. ":" + 选中项原文逐行 + 非空自定义行，块间空行，无尾随空行
-function M.compose_questions(questions, answers, customs)
-  local qs = {}
-  for _, q in ipairs(questions or {}) do
-    qs[#qs + 1] = q
-  end
-  if #qs <= 1 then
-    local q = qs[1] or {}
-    local picked = (#qs == 1 and answers and answers[1]) or {}
-    local custom = (#qs == 1 and customs and customs[1]) or nil
-    return M.compose(q.options, picked, custom)
-  end
-  local blocks = {}
-  for k, q in ipairs(qs) do
-    local body = M.compose(q.options, answers and answers[k] or {}, customs and customs[k] or nil)
-    local head = (type(q.label) == "string" and q.label ~= "") and q.label or ("Q" .. k)
-    blocks[#blocks + 1] = body == "" and (head .. ":") or (head .. ":\n" .. body)
-  end
-  return table.concat(blocks, "\n\n")
-end
-
 -- 建议标记（渲染在选项文本末尾，放不下则独占一行；Comment 灰）；
 -- 只可能落在原选项上——Enter 生成的自定义选项永不带建议标记
 local MARKER = "· 建议"
@@ -257,100 +217,6 @@ local STAGE_LABELS = {
 }
 local CHROME_ROWS = 6 -- 弹窗总高 → 上框内容行的换算：边框2 + 底衬1 + 输入行外框3
 
-local DEFAULT_HEIGHT_RATIO = 0.6
-local DEFAULT_WIDTH_RATIO = 0.7
-
--- 固定高度比例：config.options.question_form.height_ratio（另一 lane 添加）；
--- config 缺失/字段缺失/非法值一律安全回退 0.6
-local function read_height_ratio()
-  local ok, config = pcall(require, "herder-agents.config")
-  if ok and type(config) == "table" and type(config.options) == "table"
-    and type(config.options.question_form) == "table"
-    and type(config.options.question_form.height_ratio) == "number"
-    and config.options.question_form.height_ratio > 0 then
-    return config.options.question_form.height_ratio
-  end
-  return DEFAULT_HEIGHT_RATIO
-end
-
--- 固定宽度比例：config.options.question_form.width_ratio；与 read_height_ratio
--- 同构的完整缺省回退链——config 缺失/字段缺失/非 number/≤0 一律安全回退 0.7
-local function read_width_ratio()
-  local ok, config = pcall(require, "herder-agents.config")
-  if ok and type(config) == "table" and type(config.options) == "table"
-    and type(config.options.question_form) == "table"
-    and type(config.options.question_form.width_ratio) == "number"
-    and config.options.question_form.width_ratio > 0 then
-    return config.options.question_form.width_ratio
-  end
-  return DEFAULT_WIDTH_RATIO
-end
-
--- 显示完成回调：config.options.question_form.on_show（form/fallback 题面显示
--- 完成后触发一次，ctx 形状见 start_ui 内 fire_shown 注释）；与 read_height_ratio
--- 同构的惰性 require / 完整缺省回退链——config 缺失/字段缺失/非函数一律安全
--- 回退 nil（不触发、不影响表单）
-local function read_on_show()
-  local ok, config = pcall(require, "herder-agents.config")
-  if ok and type(config) == "table" and type(config.options) == "table"
-    and type(config.options.question_form) == "table"
-    and type(config.options.question_form.on_show) == "function" then
-    return config.options.question_form.on_show
-  end
-  return nil
-end
-
--- 单题 spec 归一化：question/options 字符串化、suggested 越界过滤（保持传入顺序，
--- radio 初始选中取第一个有效建议）；question 做防御性前缀剥离——label 非空且
--- question 以 label 开头、后跟分隔符 [-–—:：.、)] 与空白时剥掉这一处前导
--- （system_prompt 已要求编号进 label，这里兜底 LLM 漏剥；剥后为空则不剥；
--- label 为空不动），其余逐字不改写；options 一律逐字不动；
--- desc 仅 tostring 归一（缺省 ""），不做任何清洗，渲染层原样展示；
--- label 仅 tostring 归一（缺省 ""）——原始标号元数据，驱动节头 `❓ <label>`、
--- 提交块头 / 未答拦截提示 / 输入行标题。n_base = 原选项数（固定）：Enter 生成
--- 的自定义选项恒追加在索引 n_base+1，suggested 越界过滤只认原选项（自定义
--- 选项永不带「· 建议」标记）
-local function normalize_question(q)
-  q = type(q) == "table" and q or {}
-  local label = tostring(q.label or "")
-  local question = tostring(q.question or "")
-  -- 防御性剥离：question 以 label 开头、后跟分隔符/空白（如 "Q2 - foo"）时剥掉
-  -- 这一处前导（取最长分隔/空白 run 一起剥，避免回溯残留下一个分隔符）；
-  -- 剥后为空（题干就是标号本身）则不剥；label 为空不动
-  if label ~= "" and question:sub(1, #label) == label then
-    local rest = question:sub(#label + 1)
-    local run = rest:match("^[%s%-–—:：.、)]+")
-    local body = run and rest:sub(#run + 1) or nil
-    if body and body ~= "" then
-      question = body
-    end
-  end
-  local item = {
-    question = question,
-    desc = tostring(q.desc or ""),
-    label = label,
-    options = {},
-    multiple = q.multiple == true,
-    suggested = {},
-    suggested_set = {},
-  }
-  if type(q.options) == "table" then
-    for _, o in ipairs(q.options) do
-      item.options[#item.options + 1] = tostring(o or "")
-    end
-  end
-  if type(q.suggested) == "table" then
-    for _, i in ipairs(q.suggested) do
-      if type(i) == "number" and item.options[i] then
-        item.suggested[#item.suggested + 1] = i
-        item.suggested_set[i] = true
-      end
-    end
-  end
-  item.n_base = #item.options -- 原选项数固定：自定义选项索引恒为 n_base+1
-  return item
-end
-
 -- 弹窗会话：一组常驻 Layout/Popup（top 题面区 + input 自定义答案行）贯穿
 -- loading → form/fallback（或 form → form）全生命周期。所有变身都在同一批
 -- 窗口/缓冲上原位完成（不卸载重挂）；几何（宽度与高度）在会话创建时一次
@@ -361,9 +227,10 @@ local function start_ui(initial)
     current_close() -- 旧弹窗（含 loading 骨架/表单）直接关闭（不回调），让位新问题
   end
 
-  -- 依赖全部在会话内加载：保证模块 require 零副作用（headless 无 nui 也可断言 compose）
+  -- 依赖全部在会话内加载：保证模块 require 零副作用（state.lua 纯函数可 headless 直测）
   local common = require("herder-agents.ui.common")
   local utils = require("herder-agents.utils")
+  local config = require("herder-agents.config")
   local Popup = require("nui.popup")
   local NuiText = require("nui.text")
   local Layout = require("nui.layout")
@@ -374,14 +241,17 @@ local function start_ui(initial)
   local born_loading = initial.loading == true
 
   -- ── 固定高度：编辑器行数 × ratio，收敛到 [loading 最小体量, 屏高-1] ──
-  local total_h = math.floor(vim.o.lines * read_height_ratio())
+  -- config 默认值深合并保证 question_form 表与字段恒存在（见 config.defaults），
+  -- 直接读取、不再走防御性回退
+  local qf_cfg = config.options.question_form
+  local total_h = math.floor(vim.o.lines * qf_cfg.height_ratio)
   total_h = math.max(LOADING_MIN_ROWS + CHROME_ROWS, math.min(total_h, vim.o.lines - 1))
   local fixed_rows = total_h - CHROME_ROWS -- 上框内容行数（不足留白，超出滚动）
 
   -- ── 固定宽度：编辑器列数 × ratio，先 clamp 到屏宽 90% 再收敛 [MIN_W, MAX_W]。
   -- 与高度同一哲学：会话期一次定死，loading/form/fallback/多题全程同宽（morph
   -- 不再触碰几何）；宽度不随内容自适应——内容一律折行进该宽度，零宽度跳变 ──
-  local width = common.clamp_popup_width(math.floor(vim.o.columns * read_width_ratio()))
+  local width = common.clamp_popup_width(math.floor(vim.o.columns * qf_cfg.width_ratio))
   width = math.max(MIN_W, math.min(MAX_W, width))
   -- 折行预算按实测留足：布局宽 W → 窗口内容区(含左右 padding)为 W-4，再扣
   -- padding 2 列 → 文本安全宽度 = W-6（宁余勿溢出，避免最宽行右端被裁）
@@ -581,106 +451,24 @@ local function start_ui(initial)
   end
 
   -- spec 解析 + 会话状态重算（open 直开与 morph 共用；必须在弹窗渲染前完成）。
+  -- 纯部分（normalize / spec 解析 / form→form 延续匹配 / suggested 初选）收口
+  -- state.apply_spec；这里只做旧态快照入参、新态写回闭包，以及 shell 专属字段
+  -- 复位（on_submit_cb / submitted / input_q / leave_row / focus）。
   -- 几何不在此重算：宽度/高度会话期一次定死（见上方固定几何块），内容一律
   -- 折行进固定宽度——宽度不再由内容反推。
   local function apply_spec(spec, on_submit)
-    spec = spec or {}
     on_submit_cb = on_submit or function() end
     submitted = false
-
-    -- form→form 重问延续：变身前的表单态按题干逐字匹配，同题干的旧题继承
-    -- 选中/自定义选项/草稿（原选项位需索引与文本都相同才继承选中；自定义
-    -- 选项选中映射到新「原选项数+1」；radio 只保最低已选项）；loading 直开
-    -- 与 fallback 变身（旧态无题表）天然全新作答
-    local old_pool = {}
-    if is_form then
-      for j, oq in ipairs(questions) do
-        old_pool[#old_pool + 1] = { q = oq, sel = sel[j] or {}, co = custom_opt[j], draft = drafts[j] or "" }
-      end
-    end
-    local function take_old(stem)
-      for idx, e in ipairs(old_pool) do
-        if e.q.question == stem then
-          old_pool[idx] = old_pool[#old_pool]
-          old_pool[#old_pool] = nil
-          return e
-        end
-      end
-      return nil
-    end
-
-    is_form = spec.mode ~= "fallback"
-    questions = {}
-    raw_text = ""
-    sel, custom_opt, drafts, input_q, leave_row = {}, {}, {}, 1, {}
-    if is_form then
-      if type(spec.questions) == "table" and #spec.questions > 0 then
-        for _, q in ipairs(spec.questions) do
-          questions[#questions + 1] = normalize_question(q)
-        end
-      elseif type(spec.options) == "table" or type(spec.question) == "string" then
-        -- 旧扁平单题 spec：等价 questions={一条}（N=1 输出与历史完全一致）
-        questions[1] = normalize_question(spec)
-      end
-    else
-      raw_text = tostring(spec.raw_text or "")
-    end
-    nq = #questions
-
-    for k, q in ipairs(questions) do
-      local match = take_old(q.question)
-      local s = {}
-      if match then
-        -- 延续旧作答：原选项位文本相同才继承；自定义选项（含文本物化）延续
-        local oldq = match.q
-        local keys = {}
-        for i in pairs(match.sel) do
-          keys[#keys + 1] = i
-        end
-        table.sort(keys)
-        local lowest = nil
-        for _, i in ipairs(keys) do
-          local keep = nil
-          if i <= oldq.n_base and i <= q.n_base and oldq.options[i] == q.options[i] then
-            keep = i
-          elseif match.co and i == oldq.n_base + 1 then
-            keep = q.n_base + 1
-          end
-          if keep then
-            s[keep] = true
-            if not lowest or keep < lowest then
-              lowest = keep
-            end
-          end
-        end
-        if not q.multiple then
-          s = lowest and { [lowest] = true } or {}
-        end
-        if match.co then
-          custom_opt[k] = match.co
-          q.options[q.n_base + 1] = match.co.text
-        end
-        drafts[k] = match.draft
-      end
-      if next(s) == nil then
-        -- 未延续（新题/旧题未作答）：suggested 初选——单选取第一个有效建议
-        -- （无则初始无选中），多选取全部 suggested
-        if q.multiple then
-          for i in pairs(q.suggested_set) do
-            s[i] = true
-          end
-        else
-          for _, i in ipairs(q.suggested) do
-            s[i] = true
-            break
-          end
-        end
-      end
-      sel[k] = s
-      if drafts[k] == nil then
-        drafts[k] = ""
-      end
-    end
+    local st = state.apply_spec(spec, {
+      is_form = is_form,
+      questions = questions,
+      sel = sel,
+      custom_opt = custom_opt,
+      drafts = drafts,
+    })
+    is_form, questions, nq, raw_text = st.is_form, st.questions, st.nq, st.raw_text
+    sel, custom_opt, drafts = st.sel, st.custom_opt, st.drafts
+    input_q, leave_row = 1, {}
     focus = is_form and "options" or "input"
   end
 
@@ -943,8 +731,20 @@ local function start_ui(initial)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, main_lead, { end_col = main_lead + #glyph, hl_group = "HerderQFormOn" })
-    vim.api.nvim_buf_set_extmark(buf, ns, pad + 1, main_lead + #glyph + 2, { end_col = main_lead + #main, hl_group = "HerderQFormQuestion" })
+    vim.api.nvim_buf_set_extmark(
+      buf,
+      ns,
+      pad + 1,
+      main_lead,
+      { end_col = main_lead + #glyph, hl_group = "HerderQFormOn" }
+    )
+    vim.api.nvim_buf_set_extmark(
+      buf,
+      ns,
+      pad + 1,
+      main_lead + #glyph + 2,
+      { end_col = main_lead + #main, hl_group = "HerderQFormQuestion" }
+    )
     if sub ~= "" then
       vim.api.nvim_buf_set_extmark(buf, ns, pad + 2, sub_lead, { end_col = sub_lead + #sub, hl_group = "Comment" })
     end
@@ -1082,20 +882,9 @@ local function start_ui(initial)
       utils.warn("自定义答案为空，输入内容后按回车生成选项")
       return
     end
-    local q = questions[k]
-    local idx = q.n_base + 1
-    local existed = custom_opt[k] ~= nil
-    custom_opt[k] = { text = text }
-    q.options[idx] = text -- 物化进选项表：渲染/compose 直接消费
-    drafts[k] = text -- 草稿与已提交内容对齐（再次 a 预填同一文本）
-    if not existed then
-      if q.multiple then
-        sel[k][idx] = true
-      else
-        sel[k] = { [idx] = true } -- radio：新建即选中，原选中取消
-      end
-    end
+    state.set_custom({ questions = questions, sel = sel, custom_opt = custom_opt, drafts = drafts }, k, text)
     render()
+    local idx = questions[k].n_base + 1
     local row = (q_opt_first_row[k] and q_opt_first_row[k][idx]) or q_first_row[k] or 1
     leave_row[k] = row -- 后续 Tab 往返停在该自定义选项上
     focus_options_row(row)
@@ -1161,7 +950,7 @@ local function start_ui(initial)
       input_win = input_popup.winid,
       input_buf = input_popup.bufnr,
     }
-    local on_show = read_on_show()
+    local on_show = config.options.question_form.on_show
     if type(on_show) == "function" then
       local ok, err = pcall(on_show, ctx)
       if not ok then
@@ -1181,16 +970,7 @@ local function start_ui(initial)
     if not m or m.kind ~= "option" then
       return
     end
-    local q = questions[m.q]
-    if q.multiple then
-      if sel[m.q][m.opt] then
-        sel[m.q][m.opt] = nil
-      else
-        sel[m.q][m.opt] = true
-      end
-    else
-      sel[m.q] = { [m.opt] = true } -- radio：始终恰一项；对已选项 space 不反选
-    end
+    state.toggle({ questions = questions, sel = sel }, m.q, m.opt)
     render()
     pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
   end
@@ -1212,18 +992,16 @@ local function start_ui(initial)
         utils.warn("No option selected and custom answer is empty")
         return
       end
-      for k = 1, nq do
-        if not question_answered(k) then
-          local name = questions[k].label ~= "" and questions[k].label or ("第 " .. k .. " 题")
-          utils.warn(string.format("未作答（%s）：%s", name, stem_preview(questions[k].question)))
-          if focus == "options" and top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
-            local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_first_row[k] or 1
-            pcall(vim.api.nvim_set_current_win, top_popup.winid)
-            pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
-          end
-          render() -- 已答计数刷新
-          return -- 弹窗保留，不提交
+      for _, miss in ipairs(state.unanswered({ questions = questions, sel = sel })) do
+        local k = miss.k
+        utils.warn(string.format("未作答（%s）：%s", miss.label, stem_preview(questions[k].question)))
+        if focus == "options" and top_popup.winid and vim.api.nvim_win_is_valid(top_popup.winid) then
+          local row = (q_opt_first_row[k] and q_opt_first_row[k][1]) or q_first_row[k] or 1
+          pcall(vim.api.nvim_set_current_win, top_popup.winid)
+          pcall(vim.api.nvim_win_set_cursor, top_popup.winid, { row, 0 })
         end
+        render() -- 已答计数刷新
+        return -- 弹窗保留，不提交（首个未答题点名后直接返回）
       end
       local answers = {}
       for k = 1, nq do
@@ -1236,7 +1014,7 @@ local function start_ui(initial)
       end
       submitted = true
       close()
-      on_submit_cb(M.compose_questions(questions, answers, {})) -- 恰一次
+      on_submit_cb(state.compose_questions(questions, answers, {})) -- 恰一次
     else
       if custom == "" then
         utils.warn("Custom answer is empty")
