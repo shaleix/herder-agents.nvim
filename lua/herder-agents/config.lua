@@ -177,8 +177,10 @@ M.defaults = {
   chat_size = { width = 85, height = 35 },
 
   -- 输入弹窗（aider-input filetype）补全：默认注册 blink.cmp 的 herder_skills
-  -- （按当前工具的 tools.<name>.skills 取 skill 列表，见 skills.lua）与
-  -- herder_path（复用 blink.cmp 内置 path source，按 cwd 补全文件路径）
+  -- （按当前工具的 tools.<name>.skills 取 skill 列表，见 skills.lua）、
+  -- herder_agents（herdr:<pane_id> 提及补全：herdr agent list 的会话级 agent
+  -- 列表，5s 缓存，见 agents.lua）与 herder_path（复用 blink.cmp 内置 path
+  -- source，按 cwd 补全文件路径）
   completion = {
     enabled = true,
     skill_ttl = 300, -- skill 列表缓存秒数（按工具 + cwd 分键缓存）

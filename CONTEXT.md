@@ -5,6 +5,8 @@
 - **tool** — 一个 CLI 编码代理（opencode、codex、qoder…）。注册于 `config.options.tools`，有序列表唯一表示是 `config.options.tool_order`。
 - **current tool** — 当前操作目标，`config.current_tool()`（`vim.g.ai_tool`，回落 `default_tool`）。
 - **pane** — Herdr 终端面板，agent 运行处。pane 生命周期（lookup/find/toggle/interrupt/new_session/replace/relaunch）全部收口在 `panes.lua`。
+- **agent target** — herdr agent 子命令接受的寻址标识；本插件使用 pane_id（`wX:p2`），agent name 可选且可能缺失。
+- **herdr mention** — prompt 文本里的 `herdr:<pane_id> (workspace:kind)` 引用语法，用来指代一个 herdr agent；括号内是该 agent 的 workspace 名与 kind。
 - **relaunch** — 面板内重启 agent 的固定时序：ctrl+c → 终端复位载荷 → ctrl+c → `pane run` → 轮询前台进程（500ms/60）。唯一实现在 `panes.relaunch`；优雅退出（/quit）与 TERM→KILL 是两种退出策略，汇入同一 relaunch。
 - **delivery** — 提示词传输队列（`delivery.lua`）。两条通道：**agent channel**（`herdr agent prompt`，懂 agent 状态机）与 **text channel**（`pane send-text` + 括号粘贴编码 + 提交键）。双通道是 herdr CLI 固有 interface，不是冗余。
 - **note** — 锚定在代码行的批注（extmark 跟随编辑），会话内存储；`notes.lua` 是存储，`ui/notes_view.lua` 是评审弹窗。

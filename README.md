@@ -353,10 +353,11 @@ opts = {
 
 The prompt popup buffer uses filetype `aider-input`. If
 [blink.cmp](https://github.com/Saghen/blink.cmp) is installed, the plugin
-registers two sources for it by default — no user config needed:
+registers three sources for it by default — no user config needed:
 
 - `herder_skills` — completes the **current tool's** skills (per-tool sources
   and triggers, see below), each item carrying description/documentation
+- `herder_agents` — completes `herdr:<pane_id>` **agent mentions** (see below)
 - `herder_path` — file paths relative to the current working directory
   (reuses blink.cmp's built-in path source)
 
@@ -404,6 +405,23 @@ opts = {
   },
 }
 ```
+
+### Agent mentions (`herdr_agents` source)
+
+Typing `herdr:` in the prompt offers every agent returned by `herdr agent list`
+for the current herdr session (across workspaces; outside a herdr session the
+list stays empty). Each candidate renders as `pane_id (workspace_name:kind)` —
+the workspace name is joined from `herdr workspace list` on every refresh
+(falling back to the workspace id). The input buffer's agent binding (written
+for the chat prompt popup and the line-prompt inline input; the note editor has
+no binding) is marked `current` in the detail line and ranked first; agents on
+the same tab
+rank next, the rest follow blink's fuzzy ranking (`filterText` matches pane id,
+workspace, kind, name, terminal title and cwd). Accepting an item inserts the
+same `pane_id (workspace_name:kind)` text you see in the menu, so the prompt
+ends up with `herdr:<pane_id> (workspace_name:kind)` — still plain prompt text;
+submission and delivery behavior are unchanged. The list is cached for 5 seconds
+with stale-while-refresh; failures degrade silently to the previous/empty list.
 
 Disable everything with `completion = { enabled = false }`.
 

@@ -528,6 +528,8 @@ end
 --   title    边框左上标题文本（自动加 icon 前缀；缺省 "note "）
 --   footer   边框右下快捷键提示（缺省 " C-Enter: save · Esc: cancel "）
 --   prefill  预填内容（光标到末行行尾进入插入；缺省空白）
+--   pane_id  绑定的 agent pane（写入 vim.b.pane_id，供 herdr:<pane_id> 提及
+--            补全判定"当前 agent"；缺省不绑定 —— note 输入无 agent 绑定）
 --   on_save  fun(text):boolean|nil —— 返回 false 表示提交失败，保留缝隙与内容供重试
 local NOTE_INPUT_NS = vim.api.nvim_create_namespace("herder_agents_note_input")
 local NOTE_INPUT_ROWS = 2 -- 输入内容区高度
@@ -594,6 +596,11 @@ local function inline_input_gap(range, opts)
       winhighlight = "Normal:Normal,NormalFloat:Normal,FloatBorder:Comment,FloatTitle:Comment",
     },
   })
+  -- 绑定 agent pane（与 chat 弹窗的 vim.b.ai_tool 同款约定）：herdr:<pane_id>
+  -- 提及补全据 vim.b.pane_id 标记"当前 agent"（缺省不设置 —— 无 current 标记）
+  if opts.pane_id then
+    vim.b[popup.bufnr].pane_id = opts.pane_id
+  end
 
   -- 原生 title/footer（渲染在上/下边框线，nvim 0.9+）：左上 icon+标题，右下快捷键提示
   local icon = (config.options.icons and config.options.icons.note) or ""
@@ -703,10 +710,11 @@ function M.add_prompt(range)
   local name = config.current_tool()
   -- 注意：此处只能用 M.* 表访问（bind_tool_pane / deliver_prompt 等局部函数
   -- 定义在文件后方，直接引用会按全局 nil 解析）
-  local verify_binding = M.bind_tool_pane(name)
+  local verify_binding, bound_pane_id = M.bind_tool_pane(name)
   inline_input_gap(range, {
     title = "prompt ",
     footer = " C-Enter: send · Esc: cancel ",
+    pane_id = bound_pane_id, -- 输入 buffer 绑定 agent pane（herdr: 提及补全的 current 依据）
     on_save = function(text)
       local tool = config.options.tools[name]
       if not tool then
@@ -762,16 +770,19 @@ local function build_prompt_with_files(value)
 end
 
 -- 草稿会话绑定（借鉴 codex.nvim ask.lua 的 follow-up 绑定）：草稿打开时钉住目标
--- pane，返回校验闭包；提交时对查到的当前 pane 调用，pane 已被关闭/替换
---（switch_replace / codex model 切换会改名复用同一 pane）则拒绝发送，
--- 防止把跟进消息静默发进另一个会话。打开时 pane 还不存在 → 绑定为 nil，
--- 无法校验，放行（pane 缺失的提示由调用方给出）
+-- pane，返回校验闭包；第二个返回值是钉住的 pane_id（nil = 打开时 pane 尚不存在），
+-- 供调用方写入输入 buffer 的 vim.b.pane_id —— herdr:<pane_id> 提及补全据此标记
+-- 当前 agent（只取第一返回值的既有调用不受影响）。提交时对查到的当前 pane 调用，
+-- pane 已被关闭/替换（switch_replace / codex model 切换会改名复用同一 pane）则
+-- 拒绝发送，防止把跟进消息静默发进另一个会话。打开时 pane 还不存在 → 绑定为
+-- nil，无法校验，放行（pane 缺失的提示由调用方给出）
 local function bind_tool_pane(name)
   local bound_pane = panes.lookup(name)
   local bound_pane_id = bound_pane and bound_pane.pane_id or nil
-  return function(current_pane)
+  local verify = function(current_pane)
     return delivery.check_binding(name, bound_pane_id, current_pane)
   end
+  return verify, bound_pane_id
 end
 
 -- bracketed paste 编码已移至 utils.bracketed_paste_encode（delivery 文本通道共用；
@@ -811,7 +822,7 @@ local function herdr_cli_show_input(name, tool, default_value)
     opts.default_value = default_value
   end
   -- 草稿会话绑定：打开时钉住目标 pane，提交时校验未被替换（见 bind_tool_pane）
-  local verify_binding = bind_tool_pane(name)
+  local verify_binding, bound_pane_id = bind_tool_pane(name)
   local keep_draft = function(value)
     last_input_content[title] = vim.split(value, "\n", { plain = true })
   end
@@ -845,6 +856,11 @@ local function herdr_cli_show_input(name, tool, default_value)
   end, opts, title)
   -- 钉住本弹窗的目标工具，供 aider-input 补全源决定技能前缀（qodercli/omp 用 /name，codex 用 $name）
   vim.b[prompt_popup.bufnr].ai_tool = name
+  -- 绑定的 agent pane 一并钉进输入 buffer：herdr:<pane_id> 提及补全据此标记
+  -- 当前 agent（pane 未就绪时无绑定，不设置 —— 补全无 current 标记）
+  if bound_pane_id then
+    vim.b[prompt_popup.bufnr].pane_id = bound_pane_id
+  end
   setup_file_tree(content_popup, prompt_popup, layout, session)
 end
 
