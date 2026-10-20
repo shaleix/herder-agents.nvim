@@ -134,12 +134,16 @@ local function to_result(r)
 end
 
 --- 同步执行（argv 数组，无 shell），返回 { code, stdout, stderr }
-M.exec = function(argv)
+--- opts 可选：{ cwd = string, timeout = number }，cwd/timeout 透传 vim.system
+--- （timeout 单位毫秒）；注入的测试 stub 收到 (argv, opts)，旧单参 stub 不受
+--- 影响（Lua 自动丢弃多余实参）
+M.exec = function(argv, opts)
   if cli_exec then
-    return cli_exec(argv)
+    return cli_exec(argv, opts)
   end
+  opts = opts or {}
   local ok, res = pcall(function()
-    return vim.system(argv, { text = true }):wait()
+    return vim.system(argv, { text = true, cwd = opts.cwd, timeout = opts.timeout }):wait()
   end)
   if not ok then
     return { code = -1, stdout = "", stderr = tostring(res) }
@@ -284,14 +288,37 @@ M.herdr_ok = function(...)
   return M.exec({ "herdr", ... }).code == 0
 end
 
---- 通用选择器：fzf-lua 可用时用 fzf（居中圆角浮窗），未安装时退回 vim.ui.select。
+--- fzf-lua 可用性：模块存在 **且** `fzf` 可执行文件在 PATH 上。fzf-lua 在缺
+--- binary 时只打印 "not a valid executable" 并 abort（不抛错），所以不能只靠
+--- pcall(require) 判断；测试可经 set_fzf_available 注入。
+local fzf_available_override = nil
+
+--- 测试注入：覆盖 fzf 可用性判断（传 nil 恢复真实检测）
+M.set_fzf_available = function(fn)
+  fzf_available_override = fn
+end
+
+---@return boolean
+function M.fzf_available()
+  if fzf_available_override then
+    return fzf_available_override()
+  end
+  if vim.fn.executable("fzf") ~= 1 then
+    return false
+  end
+  local ok, fzf = pcall(require, "fzf-lua")
+  return ok and fzf ~= nil
+end
+
+--- 通用选择器：fzf-lua（含 fzf binary）可用时用 fzf（居中圆角浮窗），
+--- 否则退回 vim.ui.select。
 --- 两条路径都恰好回调一次 on_select：选中传候选字符串，取消传 nil（调用方自行判空）
 ---@param entries string[] 候选列表（字符串）
 ---@param prompt string 选择器提示文案
 ---@param on_select fun(choice: string|nil)
 function M.pick(entries, prompt, on_select)
-  local ok, fzf = pcall(require, "fzf-lua")
-  if ok then
+  if M.fzf_available() then
+    local fzf = require("fzf-lua")
     fzf.fzf_exec(entries, {
       prompt = prompt,
       winopts = {
@@ -309,7 +336,6 @@ function M.pick(entries, prompt, on_select)
     })
     return
   end
-  -- fzf-lua 未安装：退回 vim.ui.select
   vim.ui.select(entries, { prompt = prompt }, on_select)
 end
 

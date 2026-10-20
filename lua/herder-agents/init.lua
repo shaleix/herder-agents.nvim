@@ -133,6 +133,18 @@ setup_commands = function()
       desc = "Toggle nvim pane width (shrink to toggle_ratio / restore)",
     })
   end
+
+  -- 当前 agent pane 可见视口内的文件挑选（fzf-lua；提取真实存在的路径，
+  -- 保留 file:line:col 直达）
+  if cmds.visible_files then
+    vim.api.nvim_create_user_command(cmds.visible_files, function(opts)
+      M.visible_files({ debug = opts.bang })
+    end, {
+      nargs = 0,
+      bang = true,
+      desc = "Open files visible in the current agent pane (fzf-lua; ! = diagnostics)",
+    })
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -262,6 +274,11 @@ setup_keymaps = function()
   map("question", { "n" }, function()
     require("herder-agents.question").ask()
   end, "AI question form (extract & answer)")
+
+  -- 当前 agent 可见视口里的文件挑选（:AIVisibleFiles 同效）
+  map("visible_files", { "n" }, function()
+    M.visible_files()
+  end, "AI visible files")
 end
 
 -- ---------------------------------------------------------------------------
@@ -324,6 +341,13 @@ end
 -- 未配置 models 的工具 → 按 model_switch 配置经 herdr 发送 keys/cmd 兜底
 function M.switch_model()
   require("herder-agents.ui.chat").switch_tool_model(config.current_tool())
+end
+
+-- 打开当前 agent pane 可见视口里出现的文件（提取真实存在的路径，
+-- 保留 file:line[:col]；fzf-lua 挑选，见 visible_files.lua / ui/visible_files.lua）。
+-- opts.debug = true（:AIVisibleFiles!）输出完整诊断日志
+function M.visible_files(opts)
+  require("herder-agents.ui.visible_files").open(opts)
 end
 
 -- ---------------------------------------------------------------------------

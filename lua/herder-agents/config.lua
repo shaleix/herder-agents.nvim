@@ -289,6 +289,7 @@ M.defaults = {
     shrink_toggle = "HerdrShrinkToggle",
     question = "AIQuestion", -- agent 提问表单（捕获 → LLM 提取 → 表单作答）
     question_dev = "AIQuestionDev", -- 开发：本地文件 / 当前 buffer 驱动提问表单（提交不投递；弹窗测试 / 提示词调优）
+    visible_files = "AIVisibleFiles", -- 当前 agent pane 可见视口内的文件挑选（fzf-lua）
   },
 
   -- 快捷键：默认【不绑定任何快捷键】，由用户显式传入才注册。每项独立配置完整
@@ -298,7 +299,7 @@ M.defaults = {
   --   false   显式关闭（与不传等价）
   -- 不想走本配置项的，也可以不传 keys，直接用 API 自行 vim.keymap.set（见 README）
   keys = {
-    -- toggle 的默认 mode 为 n；input 为 n + x（x 预填选区上下文）；
+    -- toggle / visible_files 的默认 mode 为 n；input 为 n + x（x 预填选区上下文）；
     -- switch 为 n；其余均为 n + x
     -- toggle = "<leader>ho",
     -- input = "<leader>he",
@@ -314,6 +315,7 @@ M.defaults = {
     -- switch_mode = "<leader>hM", -- 切换 agent 模式（按工具的 mode_switch 配置发送）
     -- model = "<leader>hm", -- 切换模型（models 配置驱动重启 / model_switch 兜底）
     -- question = "<leader>hq", -- agent 提问表单：捕获 → LLM 提取 → 表单作答（:AIQuestion 同效）
+    -- visible_files = "<leader>hv", -- 打开当前 agent 可见视口里出现的文件（fzf-lua，保留 file:line:col）
     -- shrink_toggle = "<leader>h<", -- 宽度 toggle：nvim 与 agent 分界在 toggle_ratio 与默认分屏比例（split.ratio）间切换
   },
 }

@@ -8,7 +8,7 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
 
 - [Herdr](https://github.com/mildwind/herdr) (`HERDR_ENV=1`) at runtime
 - [nui.nvim](https://github.com/MunifTanjim/nui.nvim)
-- Optional: fzf-lua (nicer pickers), nvim-web-devicons or mini.icons (file tree icons)
+- Optional: fzf-lua + the `fzf` executable (nicer pickers; without either the plugin falls back to `vim.ui.select`), nvim-web-devicons or mini.icons (file tree icons)
 
 ## Install
 
@@ -121,6 +121,7 @@ Annotate code inline, then review and send the annotations from a dedicated popu
 - `:AIDropQueue` — drop prompts queued while no agent was ready
 - `:AIQuestion` — extract the agent's pending question into an answer form (see below)
 - `:AIQuestionDev [file]` — dev: drive the question form from a local file or the current buffer (see below)
+- `:AIVisibleFiles[!]` — open the files visible in the current agent pane (see below; `!` = diagnostics)
 
 ## Agent question form
 
@@ -217,6 +218,34 @@ Anything else (`.txt` capture snapshots, or the current buffer) runs the full
 pipeline against the real LLM. Submitting in dev mode never delivers to the
 agent: the composed text is printed to `:messages`, along with the raw LLM
 response and stats (question count, read-more rounds, retries, elapsed ms).
+
+## Visible files
+
+`:AIVisibleFiles` (optional `keys.visible_files`) turns what the agent is
+showing into a file picker:
+
+- Captures the **visible viewport** of the current tool's agent pane via
+  `herdr pane read <pane_id> --source visible` (no scrollback), strips ANSI and
+  pane border decorations, and extracts every path-like token that really
+  exists on disk — resolution goes against the pane cwd, the repo root
+  (`git rev-parse --show-toplevel`), and home. Leading `@` mentions (the
+  plugin's `Relate file:` syntax) are accepted too. Standalone names like
+  `README` can match a unique repo basename (`README.md` fallback), and
+  `file:line:col` targets are preserved for direct cursor placement.
+- With candidates, opens fzf-lua's `files` provider fed from the candidate
+  list — previews, icons, and the default edit action (cursor jumps to
+  `line:col`) all work; with no visible candidates it falls back to the normal
+  repo-files listing. The picker needs both the fzf-lua module **and** the
+  `fzf` executable on `PATH`; otherwise (or if the provider call fails) it
+  falls back to `vim.ui.select`.
+- Repo indexing needs `fd` or `fdfind` (falls back to `git ls-files`), is
+  capped at 5000 entries with a 5s timeout, and is skipped when the repo root
+  is `$HOME`.
+- Diagnostics: `:AIVisibleFiles!` prints the selected tool/pane, cwd, repo
+  root, capture size, repo index source/count, per-token resolution attempts,
+  and the picker branch; zero-candidate runs print the same diagnostics
+  automatically. The full log and the captured viewport are written to temp
+  files whose paths are shown in `:messages`.
 
 ## Prompt delivery
 
@@ -429,7 +458,7 @@ Disable everything with `completion = { enabled = false }`.
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
-`add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`,
+`add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`, `visible_files()`,
 `send_prompt(tool, text[, on_done])` (submit without the popup; `on_done(ok, queued)`
 fires after the actual delivery),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
