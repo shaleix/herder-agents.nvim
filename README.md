@@ -455,6 +455,18 @@ with stale-while-refresh; failures degrade silently to the previous/empty list.
 
 Disable everything with `completion = { enabled = false }`.
 
+## Tests
+
+```sh
+make test                                    # 全量：tests/specs（plenary，仿 neogit）
+TEST_FILES=tests/specs/herder-agents/panes_spec.lua make test   # 单个 spec
+```
+
+Each `*_spec.lua` runs in its own headless nvim instance
+(`tests/minimal_init.lua` only assembles the runtimepath). plenary.nvim is
+resolved from your runtimepath, `~/.local/share/nvim/lazy/plenary.nvim`, or
+cloned into `tmp/` on first run.
+
 ## API
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
