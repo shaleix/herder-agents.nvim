@@ -247,7 +247,7 @@ M.defaults = {
                               -- 改用 extra_body 显式配置
   },
 
-  -- agent 提问表单弹窗尺寸（ui/question_form.lua 读取）：固定高度 = 编辑器行数 ×
+  -- agent 提问表单弹窗尺寸（ui/question_form/ 读取）：固定高度 = 编辑器行数 ×
   -- height_ratio、固定宽度 = 编辑器列数 × width_ratio（收敛到 [56, 88]），
   -- 全形态同尺寸、morph 零几何跳变；缺失时 UI 自带 0.6 / 0.7 缺省
   -- on_show = fun(ctx)：题面「显示完成」回调——form/fallback 都算（loading 态
