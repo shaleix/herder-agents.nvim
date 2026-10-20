@@ -2918,7 +2918,7 @@ local function run_visible_files_tests()
       and dbg_joined:find("HIT test/mentioned.md:9", 1, true) ~= nil,
     "extract debug log：@ 剥离 / 路径尝试 / HIT 轨迹"
   )
-  check(vf.VERSION == "visible-files/2", "visible_files.VERSION 可用于确认运行版本")
+  check(vf.VERSION == "visible-files/3", "visible_files.VERSION 可用于确认运行版本")
   -- 终端硬换行：上一行接近正文宽度时与下一行拼接（src/ma + in.py:42）
   local wrap_screen = table.concat({
     string.rep("x", 60) .. " src/ma",
@@ -2999,11 +2999,14 @@ local function run_visible_files_tests()
       return { pane_id = "p1", cwd = root, foreground_cwd = root }
     end,
   }
-  local captured_fzf
+  local captured_fzf, captured_exec
   package.preload["fzf-lua"] = function()
     return {
       files = function(opts)
         captured_fzf = opts
+      end,
+      fzf_exec = function(entries, opts)
+        captured_exec = { entries = entries, opts = opts }
       end,
     }
   end
@@ -3013,33 +3016,32 @@ local function run_visible_files_tests()
     return true
   end)
 
-  -- ≥1 可见候选：files provider + cat 临时文件 + prompt/title/on_close
+  -- ≥1 可见候选：fzf_exec 直接携带候选（不再走 files provider + cat 链路）
   pane_screen = { code = 0, stdout = screen }
-  captured_fzf = nil
+  captured_fzf, captured_exec = nil, nil
   ui_vf.open()
-  check(captured_fzf ~= nil and captured_fzf.cwd == root, "UI：fzf files cwd = 仓库根")
-  check(captured_fzf.prompt:find("Visible files>", 1, true) ~= nil, "UI：prompt = Visible files>")
-  check(captured_fzf.winopts ~= nil and captured_fzf.winopts.title == " Visible files ", "UI：winopts.title")
-  local tmp_in_cmd = captured_fzf.cmd:match("^cat (.+)$")
-  check(tmp_in_cmd ~= nil, "UI：cmd = cat <临时文件>")
-  local tmp_file = tmp_in_cmd:gsub("^'", ""):gsub("'$", "")
-  check(vim.deep_equal(vim.fn.readfile(tmp_file), expected), "UI：临时文件逐行携带可见候选")
-  check(type(captured_fzf.winopts.on_close) == "function", "UI：winopts.on_close 已挂清理回调")
-  captured_fzf.winopts.on_close()
-  check(vim.fn.filereadable(tmp_file) == 0, "UI：on_close 删除临时文件")
+  check(
+    captured_exec ~= nil and vim.deep_equal(captured_exec.entries, expected),
+    "UI：fzf_exec 直接携带可见候选（Lua 侧写管道，必然送达）"
+  )
+  check(
+    captured_exec.opts ~= nil and captured_exec.opts.prompt:find("Visible files>", 1, true) ~= nil,
+    "UI：prompt = Visible files>"
+  )
+  check(captured_fzf == nil, "UI：可见候选不调用 files provider（自定义 cmd 链路已弃用）")
 
   -- 0 可见候选：回退 repo files provider（无 cmd、fallback prompt/title）
   pane_screen = { code = 0, stdout = "just chatting, no paths at all here" }
-  captured_fzf = nil
+  captured_fzf, captured_exec = nil, nil
   ui_vf.open()
-  check(captured_fzf ~= nil and captured_fzf.cmd == nil, "UI：无候选时不传 cmd（正常 fd provider）")
+  check(captured_exec == nil and captured_fzf ~= nil and captured_fzf.cmd == nil, "UI：无候选时回退 files provider")
   check(
     captured_fzf.prompt:find("No visible files", 1, true) ~= nil
       and captured_fzf.winopts.title == " Repo files (fallback) ",
     "UI：回退 prompt / title（No visible files — repo files）"
   )
 
-  -- fzf binary 缺失（模块在但 fzf 不在 PATH）：不调用 fzf.files，回退 vim.ui.select
+  -- fzf binary 缺失（模块在但 fzf 不在 PATH）：不调用任何 fzf 入口，回退 vim.ui.select
   utils.set_fzf_available(function()
     return false
   end)
@@ -3048,11 +3050,11 @@ local function run_visible_files_tests()
   vim.ui.select = function(items)
     selected_items = items
   end
-  captured_fzf = nil
+  captured_fzf, captured_exec = nil, nil
   pane_screen = { code = 0, stdout = screen }
   ui_vf.open()
   vim.ui.select = saved_select
-  check(captured_fzf == nil, "UI：fzf binary 缺失时不调用 fzf.files")
+  check(captured_fzf == nil and captured_exec == nil, "UI：fzf binary 缺失时不调用 fzf 入口")
   check(
     selected_items ~= nil and vim.deep_equal(selected_items, expected),
     "UI：fzf binary 缺失时回退 vim.ui.select（候选列表）"
@@ -3069,7 +3071,7 @@ local function run_visible_files_tests()
   utils.info = function(msg)
     infos[#infos + 1] = tostring(msg)
   end
-  captured_fzf = nil
+  captured_fzf, captured_exec = nil, nil
   pane_screen = { code = 0, stdout = screen }
   ui_vf.open({ debug = true })
   vim.api.nvim_echo = saved_echo
@@ -3077,10 +3079,10 @@ local function run_visible_files_tests()
   local log_path = infos[#infos] and infos[#infos]:match("→ (.+)$")
   local full_log = log_path and vim.fn.readfile(log_path) or {}
   local dbg = table.concat(full_log, "\n")
-  check(dbg:find("visible_files", 1, true) ~= nil, "UI debug：输出版本/环境日志")
+  check(dbg:find("visible_files visible-files/3", 1, true) ~= nil, "UI debug：输出版本/环境日志")
   check(dbg:find("candidates:", 1, true) ~= nil, "UI debug：输出候选数")
   check(dbg:find("@ stripped", 1, true) ~= nil, "UI debug：输出 @ 提及剥离轨迹")
-  check(dbg:find("picker: fzf files", 1, true) ~= nil, "UI debug：输出 picker 分支")
+  check(dbg:find("picker: fzf_exec", 1, true) ~= nil, "UI debug：输出 picker 分支")
   check(#infos >= 1 and infos[#infos]:find("diagnostics", 1, true) ~= nil, "UI debug：日志文件路径提示")
   if log_path then
     os.remove(log_path)
@@ -3088,9 +3090,6 @@ local function run_visible_files_tests()
   local cap_path = dbg:match("capture file: ([^\n]+)")
   if cap_path then
     os.remove(cap_path)
-  end
-  if captured_fzf and captured_fzf.winopts and captured_fzf.winopts.on_close then
-    captured_fzf.winopts.on_close()
   end
 
   -- 还原 stub 与全局态

@@ -319,7 +319,7 @@ end
 function M.pick(entries, prompt, on_select)
   if M.fzf_available() then
     local fzf = require("fzf-lua")
-    fzf.fzf_exec(entries, {
+    local ok, err = pcall(fzf.fzf_exec, entries, {
       prompt = prompt,
       winopts = {
         width = 0.45,
@@ -334,7 +334,10 @@ function M.pick(entries, prompt, on_select)
         end,
       },
     })
-    return
+    if ok then
+      return
+    end
+    M.warn("fzf picker failed: " .. tostring(err))
   end
   vim.ui.select(entries, { prompt = prompt }, on_select)
 end

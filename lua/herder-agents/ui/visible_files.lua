@@ -148,12 +148,10 @@ function M.open(opts)
     utils.warn("fzf executable not found; install fzf for the fzf-lua picker (using vim.ui.select)")
   end
 
-  local branch, tmp
+  local branch
   if use_fzf and #candidates > 0 then
     branch = "fzf-visible"
-    tmp = vim.fn.tempname()
-    vim.fn.writefile(candidates, tmp)
-    log("picker: fzf files (tmp=%s)", tmp)
+    log("picker: fzf_exec (visible, %d entries)", #candidates)
   elseif use_fzf and #repo > 0 then
     branch = "fzf-repo-fallback"
     log("picker: fzf repo fallback")
@@ -182,23 +180,33 @@ function M.open(opts)
   end
 
   if branch == "fzf-visible" then
-    -- 复用 files provider（预览 / 图标 / file:line:col 直达都来自 provider 自带
-    -- 行为）：候选逐行写入临时文件，cmd 用 cat 喂给 fzf；on_close 清理临时文件
-    local ok_call = pcall(fzf.files, {
-      cwd = root,
-      cmd = "cat " .. vim.fn.shellescape(tmp),
+    -- 候选直接交给 fzf_exec（Lua 侧写管道，条目必然送达）。不再走 files
+    -- provider + 自定义 cat 命令的链路：那条链路要经 opts 归一化（hidden
+    -- 追加 --hidden）+ 多进程 helper（sh -c）执行，任何一环失败都会静默
+    -- 得到空列表（实测两次）。选中后 open_target 跳 line:col。
+    local ok_call, err = pcall(fzf.fzf_exec, candidates, {
       prompt = "Visible files> ",
       winopts = {
+        width = 0.5,
+        height = 0.4,
+        row = 0.5,
+        col = 0.5,
+        border = "rounded",
         title = " Visible files ",
-        on_close = function()
-          pcall(os.remove, tmp)
+      },
+      actions = {
+        ["default"] = function(selected)
+          local choice = selected and selected[1]
+          if choice then
+            vf.open_target(choice, cwd, root)
+          end
         end,
       },
     })
     if ok_call then
       return
     end
-    pcall(os.remove, tmp)
+    utils.warn("fzf picker failed: " .. tostring(err))
     pick_open(candidates, "Visible files> ")
     return
   end

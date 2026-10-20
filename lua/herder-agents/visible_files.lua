@@ -7,7 +7,7 @@
 local M = {}
 
 -- 诊断/版本标记：:AIVisibleFiles! 的日志里会打印，便于确认运行的是哪一版模块
-M.VERSION = "visible-files/2"
+M.VERSION = "visible-files/3"
 -- 最近一次 repo_files 的数据源（诊断用）：fd / fdfind / git ls-files / none / skipped ($HOME)
 M.last_repo_source = nil
 

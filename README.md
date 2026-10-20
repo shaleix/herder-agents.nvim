@@ -232,12 +232,13 @@ showing into a file picker:
   plugin's `Relate file:` syntax) are accepted too. Standalone names like
   `README` can match a unique repo basename (`README.md` fallback), and
   `file:line:col` targets are preserved for direct cursor placement.
-- With candidates, opens fzf-lua's `files` provider fed from the candidate
-  list — previews, icons, and the default edit action (cursor jumps to
-  `line:col`) all work; with no visible candidates it falls back to the normal
-  repo-files listing. The picker needs both the fzf-lua module **and** the
-  `fzf` executable on `PATH`; otherwise (or if the provider call fails) it
-  falls back to `vim.ui.select`.
+- With candidates, opens an fzf-lua picker fed **directly** from the candidate
+  list (fuzzy filter; `enter` opens the file in the current window and jumps
+  to `line:col`); with no visible candidates it falls back to the normal
+  repo-files listing (previews/icons from fzf-lua's `files` provider). The
+  picker needs both the fzf-lua module **and** the `fzf` executable on
+  `PATH`; otherwise (or if the picker call fails) it falls back to
+  `vim.ui.select`.
 - Repo indexing needs `fd` or `fdfind` (falls back to `git ls-files`), is
   capped at 5000 entries with a 5s timeout, and is skipped when the repo root
   is `$HOME`.
