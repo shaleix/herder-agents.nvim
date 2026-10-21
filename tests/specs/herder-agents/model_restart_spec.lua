@@ -5,6 +5,11 @@ describe("终端复位 / 模型切换 / 工具切换", function()
     local utils = require("herder-agents.utils")
     local config_mod = require("herder-agents.config")
     local panes = require("herder-agents.panes")
+    -- 本文件 fixture pane 均无 workspace_id 字段（域限定行为在 panes_spec 专测）：
+    -- 显式关掉 HERDR_WORKSPACE_ID 保证确定性 —— ambient shell 可能带着，开着
+    -- find_tool_pane 的域预过滤会把 fixture pane 全部滤空、走错分支
+    local saved_ws = vim.env.HERDR_WORKSPACE_ID
+    vim.env.HERDR_WORKSPACE_ID = nil
     local argv_log = {} -- 原单文件内与共享段的记录表；本段仅在假执行器里写入、不读取
 
     -- ---------------------------------------------------------------------------
@@ -354,6 +359,11 @@ describe("终端复位 / 模型切换 / 工具切换", function()
       "工具切换：复位后、启动前再补一次 ctrl+c 清行"
     )
     assert.truthy(sw_run_line == "run:p-cx,opencode", "启动命令原样发出（opencode 未与残留字节粘连）")
+    if saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
+    end
     utils.set_exec(nil)
     utils.set_exec_async(nil)
   end)

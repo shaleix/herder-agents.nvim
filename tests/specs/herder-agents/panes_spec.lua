@@ -3,6 +3,11 @@
 describe("panes lookup / 中断按键", function()
   it("panes lookup / 中断按键", function()
     local utils = require("herder-agents.utils")
+    -- 本段 fixture 无 workspace_id 字段（域限定专测见下方独立 it）：显式关掉
+    -- HERDR_WORKSPACE_ID 保证确定性 —— ambient shell 可能带着，开着会把本段
+    -- 所有 pane 候选滤空（fail-open 语义下未设置即不过滤）
+    local saved_ws = vim.env.HERDR_WORKSPACE_ID
+    vim.env.HERDR_WORKSPACE_ID = nil
     local argv_log = {} -- 原单文件内与上一段共享的记录表；本段只写入不读取
 
     -- ---------------------------------------------------------------------------
@@ -266,6 +271,126 @@ describe("panes lookup / 中断按键", function()
       vim.env.HERDR_ENV = saved_env
     else
       vim.env.HERDR_ENV = nil
+    end
+    if saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
+    end
+  end)
+
+  -- ---------------------------------------------------------------------------
+  -- find_tool_pane workspace 域限定：HERDR_WORKSPACE_ID 可解析时候选仅限同
+  -- workspace 的 pane（三级匹配统一预过滤，①级当前 tab label 同样受限 —— 跨
+  -- workspace 的同名/同 cwd pane 不再被收编，同名 workspace 跨 tab 复用保持）；
+  -- 未设置时 fail-open 不过滤（原行为）
+  -- ---------------------------------------------------------------------------
+  it("find_tool_pane workspace 域限定", function()
+    local utils = require("herder-agents.utils")
+    local panes = require("herder-agents.panes")
+
+    local saved_env = vim.env.HERDR_ENV
+    local saved_ws = vim.env.HERDR_WORKSPACE_ID
+    vim.env.HERDR_ENV = "1"
+    local cur_cwd = vim.fn.getcwd()
+
+    -- 假执行器：pane list 条目带 workspace_id；当前 tab 恒为 t2；split 回固定新 id
+    local mk_ws_fake = function(pane_tbl)
+      local log = {}
+      local exec = function(argv)
+        table.insert(log, argv)
+        if argv[2] == "pane" and argv[3] == "current" then
+          return {
+            code = 0,
+            stdout = vim.json.encode({ result = { pane = { tab_id = "t2", pane_id = "p-nvim" } } }),
+          }
+        end
+        if argv[2] == "pane" and argv[3] == "list" then
+          return { code = 0, stdout = vim.json.encode({ result = { panes = pane_tbl } }) }
+        end
+        if argv[2] == "pane" and argv[3] == "split" then
+          return { code = 0, stdout = vim.json.encode({ result = { pane = { pane_id = "p-created" } } }) }
+        end
+        return { code = 0, stdout = "" }
+      end
+      return exec, log
+    end
+    local saw = function(log, pred)
+      for _, argv in ipairs(log) do
+        if pred(argv) then
+          return true
+        end
+      end
+      return false
+    end
+    local is_split = function(argv)
+      return argv[2] == "pane" and argv[3] == "split"
+    end
+
+    -- (a) env 可解析：异 workspace 的同名 pane 全部落空（①级当前 tab label、
+    --     ②级跨 tab 同 cwd 同 label 都被预过滤），同 workspace 跨 tab ②级照常命中
+    local mixed_panes = {
+      -- ①级形状（当前 tab t2 label 命中）但 workspace 不同 → 预过滤掉
+      { label = "opencode", tab_id = "t2", pane_id = "p-w2-curtab", cwd = "/elsewhere", workspace_id = "w2" },
+      -- ②级形状（跨 tab 同 cwd 同 label）但 workspace 不同 → 预过滤掉
+      { label = "opencode", tab_id = "t1", pane_id = "p-w2-xtab", cwd = cur_cwd, workspace_id = "w2" },
+      -- ②级：同 workspace 跨 tab 同 cwd 同 label → 保留并命中
+      { label = "opencode", tab_id = "t1", pane_id = "p-w1-xtab", cwd = cur_cwd, workspace_id = "w1" },
+    }
+    vim.env.HERDR_WORKSPACE_ID = "w1"
+    utils.set_exec(mk_ws_fake(mixed_panes))
+    local hit = panes.lookup("opencode")
+    assert.truthy(
+      hit ~= nil and hit.pane_id == "p-w1-xtab",
+      "workspace 域限定：跨 tab 复用只发生在同 workspace（异 workspace 同名 pane 不命中）"
+    )
+
+    -- 只剩异 workspace 候选时：三级全落空 → lookup nil，toggle 走 split 新建
+    local only_w2_exec, only_w2_log = mk_ws_fake({
+      { label = "opencode", tab_id = "t1", pane_id = "p-w2-only", cwd = cur_cwd, workspace_id = "w2" },
+    })
+    utils.set_exec(only_w2_exec)
+    assert.truthy(
+      panes.lookup("opencode") == nil,
+      "workspace 域限定：仅剩异 workspace 候选时 lookup 返回 nil"
+    )
+    panes.toggle("opencode")
+    assert.truthy(
+      saw(only_w2_log, is_split),
+      "workspace 域限定：三级全落空后 toggle 另 split 新实例（不收编异 workspace pane）"
+    )
+
+    -- 缺 workspace_id 字段的 pane 同样视为异 workspace（预过滤丢弃）
+    utils.set_exec(mk_ws_fake({
+      { label = "opencode", tab_id = "t1", pane_id = "p-no-ws", cwd = cur_cwd },
+    }))
+    assert.truthy(
+      panes.lookup("opencode") == nil,
+      "workspace 域限定：缺 workspace_id 的候选在 env 可解析时不命中"
+    )
+
+    -- (b) env 未设置：fail-open 不过滤 —— 异 workspace / 缺字段的同 cwd pane 仍命中（原行为）
+    vim.env.HERDR_WORKSPACE_ID = nil
+    utils.set_exec(mk_ws_fake({
+      { label = "opencode", tab_id = "t1", pane_id = "p-w2-open", cwd = cur_cwd, workspace_id = "w2" },
+    }))
+    local open_hit = panes.lookup("opencode")
+    assert.truthy(
+      open_hit ~= nil and open_hit.pane_id == "p-w2-open",
+      "workspace 域限定：HERDR_WORKSPACE_ID 未设置时不过滤（fail-open，异 workspace 仍命中）"
+    )
+
+    utils.set_exec(nil)
+    utils.set_exec_async(nil)
+    if saved_env then
+      vim.env.HERDR_ENV = saved_env
+    else
+      vim.env.HERDR_ENV = nil
+    end
+    if saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
     end
   end)
 end)

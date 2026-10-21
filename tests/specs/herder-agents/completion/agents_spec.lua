@@ -16,6 +16,11 @@ describe("herdr: 提及补全", function()
 
     local saved_env = vim.env.HERDR_ENV
     local saved_tab = vim.env.HERDR_TAB_ID
+    -- 本段 fixture 无 workspace 域限定断言（专测见 run_workspace_scope_tests）：
+    -- 显式关掉 HERDR_WORKSPACE_ID 保证确定性（ambient shell 可能带着，而
+    -- fixture 的 workspace_id 是 ws1/ws2，开着会把候选滤空）
+    local saved_ws = vim.env.HERDR_WORKSPACE_ID
+    vim.env.HERDR_WORKSPACE_ID = nil
     local saved_ttl = agents._ttl_ms
 
     -- fixture：herdr agent list 假响应 —— 两个合法 agent（不同 tab，其一缺
@@ -441,10 +446,155 @@ describe("herdr: 提及补全", function()
     agents._ttl_ms = saved_ttl
     vim.env.HERDR_ENV = saved_env
     vim.env.HERDR_TAB_ID = saved_tab
+    if saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
+    end
     vim.api.nvim_buf_delete(bound_buf, { force = true })
     vim.api.nvim_buf_delete(plain_buf, { force = true })
   end
+
+  -- ---------------------------------------------------------------------------
+  -- workspace 域限定：HERDR_WORKSPACE_ID 可解析时候选仅限同 workspace 的 agent
+  -- （跨 workspace 不出候选），(workspace:kind) 角标 / display / 打分对保留条目
+  -- 完全不变；未设置（nvim 不在 herdr 内）时 fail-open 不过滤。数据层不受影响
+  --（同 agent 列表在不同 env 下各自过滤）
+  -- ---------------------------------------------------------------------------
+  local function run_workspace_scope_tests()
+    local agents = require("herder-agents.agents")
+    local adapter = require("herder-agents.completion.agents")
+
+    local saved_env = vim.env.HERDR_ENV
+    local saved_tab = vim.env.HERDR_TAB_ID
+    local saved_ws = vim.env.HERDR_WORKSPACE_ID
+    local saved_ttl = agents._ttl_ms
+
+    -- fixture 同主套件：her1:p2 → ws1(repo-a:opencode)，her7:p9 → ws2(repo-b:codex)
+    local fake_json = vim.json.encode({
+      result = {
+        agents = {
+          {
+            pane_id = "her1:p2",
+            agent = "opencode",
+            agent_status = "idle",
+            name = "main",
+            cwd = "/repo/a",
+            tab_id = "t1",
+            workspace_id = "ws1",
+          },
+          {
+            pane_id = "her7:p9",
+            agent = "codex",
+            agent_status = "working",
+            cwd = "/repo/b",
+            tab_id = "t2",
+            workspace_id = "ws2",
+          },
+        },
+      },
+    })
+    local ws_json = vim.json.encode({
+      result = {
+        workspaces = {
+          { workspace_id = "ws1", label = "repo-a" },
+          { workspace_id = "ws2", label = "repo-b" },
+        },
+      },
+    })
+    utils.set_exec_async(function(argv, on_done)
+      if argv[2] == "workspace" then
+        on_done({ code = 0, stdout = ws_json, stderr = "" })
+      else
+        on_done({ code = 0, stdout = fake_json, stderr = "" })
+      end
+    end)
+
+    vim.env.HERDR_ENV = "1"
+    agents._reset()
+    agents.list(function() end) -- 预热缓存（数据层全量：两条 agent 都在缓存里）
+
+    local source = adapter.new({})
+    local bound_buf = vim.api.nvim_create_buf(false, true)
+    vim.b[bound_buf].pane_id = "her1:p2"
+    local function fetch_items(ctx)
+      local res = nil
+      source:get_completions(ctx, function(r)
+        res = r
+      end)
+      return res and res.items or {}
+    end
+    local by_label = function(items)
+      local map = {}
+      for _, it in ipairs(items) do
+        map[it.label] = it
+      end
+      return map
+    end
+
+    -- A) HERDR_WORKSPACE_ID = ws1：跨 workspace 的 her7:p9 不出候选；
+    --    保留条目的 (workspace:kind) 角标与 current 打分完全不变
+    vim.env.HERDR_WORKSPACE_ID = "ws1"
+    local ws1_items = by_label(fetch_items({
+      line = "herdr:her",
+      keyword = "her",
+      cursor = { 0, 9 },
+      bufnr = bound_buf,
+    }))
+    assert.truthy(
+      ws1_items["her1:p2"] ~= nil and ws1_items["her7:p9"] == nil,
+      "workspace 域限定：HERDR_WORKSPACE_ID 可解析时候选仅限同 workspace（异 workspace 不出候选）"
+    )
+    assert.truthy(
+      ws1_items["her1:p2"].insertText == "her1:p2 (repo-a:opencode)"
+        and ws1_items["her1:p2"].labelDetails ~= nil
+        and ws1_items["her1:p2"].labelDetails.detail == " (repo-a:opencode)",
+      "workspace 域限定：保留条目的 (workspace:kind) 角标不变"
+    )
+    assert.truthy(ws1_items["her1:p2"].score_offset == 10, "workspace 域限定：保留条目的 current 打分不变")
+
+    -- B) HERDR_WORKSPACE_ID = ws2：另一侧同理（过滤跟着 env 走，缓存不回存）
+    vim.env.HERDR_WORKSPACE_ID = "ws2"
+    local ws2_items = by_label(fetch_items({
+      line = "herdr:her",
+      keyword = "her",
+      cursor = { 0, 9 },
+      bufnr = bound_buf,
+    }))
+    assert.truthy(
+      ws2_items["her7:p9"] ~= nil and ws2_items["her1:p2"] == nil,
+      "workspace 域限定：切换 env 后过滤跟随（另一 workspace 的 agent 出候选）"
+    )
+
+    -- C) env 未设置：fail-open 不过滤，两条 agent 都出候选
+    vim.env.HERDR_WORKSPACE_ID = nil
+    local open_items = by_label(fetch_items({
+      line = "herdr:her",
+      keyword = "her",
+      cursor = { 0, 9 },
+      bufnr = bound_buf,
+    }))
+    assert.truthy(
+      open_items["her1:p2"] ~= nil and open_items["her7:p9"] ~= nil,
+      "workspace 域限定：HERDR_WORKSPACE_ID 未设置时不过滤（fail-open）"
+    )
+
+    utils.set_exec_async(nil)
+    agents._reset()
+    agents._ttl_ms = saved_ttl
+    vim.env.HERDR_ENV = saved_env
+    vim.env.HERDR_TAB_ID = saved_tab
+    if saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
+    end
+    vim.api.nvim_buf_delete(bound_buf, { force = true })
+  end
   it("herdr: 提及补全", function()
     run_agent_completion_tests()
+  end)
+  it("herdr: 提及补全 workspace 域限定", function()
+    run_workspace_scope_tests()
   end)
 end)

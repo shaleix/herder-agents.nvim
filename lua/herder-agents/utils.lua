@@ -268,6 +268,20 @@ M.exec_async_to_file = function(argv, on_done, timeout_ms)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- nvim 所在 herdr workspace：只认 herdr 在 pane 内注入的环境变量
+-- HERDR_WORKSPACE_ID（无 CLI 回退）。fail-open 约定（status.lua 的先例）：
+-- 未设置/为空返回 nil，调用方不过滤 —— nvim 不在 herdr 内时保持原有全量行为
+-- ---------------------------------------------------------------------------
+---@return string|nil
+function M.current_workspace_id()
+  local ws = vim.env.HERDR_WORKSPACE_ID
+  if ws ~= nil and ws ~= "" then
+    return ws
+  end
+  return nil
+end
+
 -- herdr CLI 封装（输出 JSON 的子命令，如 pane list / agent list / process-info）：
 -- 失败或输出非 JSON 时返回 nil
 M.herdr_json = function(...)

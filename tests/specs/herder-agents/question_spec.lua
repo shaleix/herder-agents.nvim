@@ -18,6 +18,12 @@ describe("agent 提问表单", function()
     local llm = require("herder-agents.llm")
     local question_mod = require("herder-agents.question")
 
+    -- 本文件 fixture pane 均无 workspace_id 字段（find_tool_pane 的域预过滤会把
+    -- 它们全部滤空）：显式关掉 HERDR_WORKSPACE_ID 保证确定性（ambient shell
+    -- 可能带着）；域限定行为本身在 panes_spec 专测
+    local qa_saved_ws = vim.env.HERDR_WORKSPACE_ID
+    vim.env.HERDR_WORKSPACE_ID = nil
+
     -- question_form stub：按 UI 契约实现 open_loading 句柄 —— 记录 open_loading()
     -- 调用次数 / set_stage 阶段序列 / morph_to(spec) 列表；closed 句柄上
     -- set_stage / morph_to 均 no-op；测试直接置 handle.closed = true 模拟 esc 取消
@@ -1068,6 +1074,11 @@ describe("agent 提问表单", function()
       vim.env.DEEPSEEK_API_KEY = qa_saved_key
     else
       vim.env.DEEPSEEK_API_KEY = nil
+    end
+    if qa_saved_ws then
+      vim.env.HERDR_WORKSPACE_ID = qa_saved_ws
+    else
+      vim.env.HERDR_WORKSPACE_ID = nil
     end
   end
   it("agent 提问表单", function()

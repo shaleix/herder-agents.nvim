@@ -2,9 +2,10 @@
 -- 数据获取收口在 agents.lua）。
 --
 -- 提及是纯文本：把 pane_id (workspace:kind) 插进 prompt（输入的 "herdr:" 留在
--- buffer），提交/投递行为完全不变（无 token 解析/路由）。候选即 `herdr agent list`
--- 返回的当前 herdr 会话 agent（跨 workspace），含当前 agent 本身（据输入
--- buffer 的 vim.b.pane_id 精确匹配，补全路径零额外 CLI）。
+-- buffer），提交/投递行为完全不变（无 token 解析/路由）。候选 = `herdr agent
+-- list` 返回的当前 herdr 会话 agent，限定 nvim 所在 workspace
+--（HERDR_WORKSPACE_ID 可解析时过滤；未设置 fail-open 不过滤），含当前 agent
+-- 本身（据输入 buffer 的 vim.b.pane_id 精确匹配，补全路径零额外 CLI）。
 --
 -- agents.lua 内部完成 TTL 缓存与异步管理（5s，stale-while-refresh，失败静默
 -- 降级），本层只做 blink 协议适配：
@@ -20,6 +21,7 @@
 local M = {}
 
 local agents = require("herder-agents.agents")
+local utils = require("herder-agents.utils")
 
 local kind_text = 1 -- LSP CompletionItemKind.Text（blink.cmp.types 加载失败时的兜底值）
 do
@@ -155,6 +157,20 @@ function M:get_completions(ctx, callback)
   -- 每次调用按 agents.list 的当前列表重建 items（无独立 items 缓存）；
   -- 无缓存的挂起回调也经 agents.list 统一 flush
   agents.list(function(entries)
+    -- workspace 域限定（fail-open）：HERDR_WORKSPACE_ID 可解析时候选仅限同
+    -- workspace 的 agent —— 提及是对 agent 的直接投递入口，跨 workspace 的
+    -- agent 本就不该出现在候选里；未设置（nvim 不在 herdr 内）时不过滤。
+    -- 数据层（agents.list）保持全量，策略只收口在展示层
+    local ws = utils.current_workspace_id()
+    if ws then
+      local scoped = {}
+      for _, e in ipairs(type(entries) == "table" and entries or {}) do
+        if type(e) == "table" and e.workspace_id == ws then
+          table.insert(scoped, e)
+        end
+      end
+      entries = scoped
+    end
     -- 当前 tab：优先取 current 条目所在 tab，无绑定时回落环境变量
     -- （同 tab 加分依据；current 加分不受影响）
     local current_tab = vim.env.HERDR_TAB_ID

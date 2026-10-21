@@ -39,10 +39,25 @@ end
 -- ③ 任意 tab 中 cwd 一致且 pane.agent == 工具名 —— herdr agent 集成的进程级
 --   检测（pane run 后秒内出现，无需 session），收编手工开 / 被改成自定义
 --   label（工单号等）的同仓库 agent pane；该级内有 agent_session 的优先
+-- workspace 域限定（fail-open）：HERDR_WORKSPACE_ID 可解析时候选仅限同
+-- workspace 的 pane —— 三级匹配的跨 tab 复用只应发生在同一 workspace 内，
+-- 跨 workspace 的同名/同 cwd pane 不再被收编；未设置（nvim 不在 herdr 内）
+-- 时不过滤。统一预过滤在三级匹配之前，①级同样受限
 local function find_tool_pane(name)
   local tab_id = current_herdr_tab_id()
+  local ws = utils.current_workspace_id()
+  local candidates = herdr_panes()
+  if ws then
+    local scoped = {}
+    for _, p in ipairs(candidates) do
+      if p.workspace_id == ws then
+        table.insert(scoped, p)
+      end
+    end
+    candidates = scoped
+  end
   local by_label, by_session, by_agent = nil, nil, nil
-  for _, p in ipairs(herdr_panes()) do
+  for _, p in ipairs(candidates) do
     if p.label == name and p.tab_id == tab_id then
       return p
     end

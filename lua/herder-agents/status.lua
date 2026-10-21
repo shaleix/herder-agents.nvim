@@ -26,7 +26,7 @@ local event_for = {
 }
 
 local function tick()
-  local here = vim.env.HERDR_WORKSPACE_ID
+  local here = utils.current_workspace_id()
   local list = utils.herdr_json("agent", "list")
   local agents = list and list.result and list.result.agents
   if type(agents) ~= "table" then
