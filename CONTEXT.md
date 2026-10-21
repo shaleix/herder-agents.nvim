@@ -7,6 +7,7 @@
 - **pane** — Herdr 终端面板，agent 运行处。pane 生命周期（lookup/find/toggle/interrupt/new_session/replace/relaunch）全部收口在 `panes.lua`。
 - **agent target** — herdr agent 子命令接受的寻址标识；本插件使用 pane_id（`wX:p2`），agent name 可选且可能缺失。
 - **herdr mention** — prompt 文本里的 `herdr:<pane_id> (workspace:kind)` 引用语法，用来指代一个 herdr agent；括号内是该 agent 的 workspace 名与 kind。
+- **workspace 域限定** — 提及补全与 `panes.find_tool_pane` 的候选仅限与 nvim 同一 herdr workspace 的 agent/pane（`utils.current_workspace_id()` 只读 pane 内注入的 `HERDR_WORKSPACE_ID`，无 CLI 回退）；解析不到（nvim 不在 herdr 内）时不过滤（fail-open，沿用 status.lua 先例）。数据层 `agents.list` 保持全量，策略只收口在关联点；delivery 拿显式 pane_id 投递，不做拦截。
 - **relaunch** — 面板内重启 agent 的固定时序：ctrl+c → 终端复位载荷 → ctrl+c → `pane run` → 轮询前台进程（500ms/60）。唯一实现在 `panes.relaunch`；优雅退出（/quit）与 TERM→KILL 是两种退出策略，汇入同一 relaunch。
 - **delivery** — 提示词传输队列（`delivery.lua`）。两条通道：**agent channel**（`herdr agent prompt`，懂 agent 状态机）与 **text channel**（`pane send-text` + 括号粘贴编码 + 提交键）。双通道是 herdr CLI 固有 interface，不是冗余。
 - **note** — 锚定在代码行的批注（extmark 跟随编辑），会话内存储；`notes.lua` 是存储，`ui/notes_view.lua` 是评审弹窗。
