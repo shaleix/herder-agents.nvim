@@ -141,7 +141,7 @@ local function popup_input(prompt, on_submit, opts, title)
       filetype = "aider-fixed-content",
     },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderFloatNormal,FloatBorder:HerderFloatBorder",
     },
   })
 
@@ -179,7 +179,7 @@ local function popup_input(prompt, on_submit, opts, title)
       filetype = "aider-input",
     },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderFloatNormal,FloatBorder:HerderFloatBorder",
     },
   })
   local split = Popup({
@@ -192,7 +192,7 @@ local function popup_input(prompt, on_submit, opts, title)
       },
     },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:LineNr",
+      winhighlight = "Normal:HerderFloatNormal,FloatBorder:LineNr",
     },
   })
 

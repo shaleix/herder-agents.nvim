@@ -168,7 +168,7 @@ function M.show()
     },
     buf_options = { filetype = "herder_notes" },
     win_options = {
-      winhighlight = "Normal:AiderInputFloatNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderFloatNormal,FloatBorder:HerderFloatBorder",
     },
   })
 

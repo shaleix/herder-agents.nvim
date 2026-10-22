@@ -364,7 +364,7 @@ local function start_ui(initial)
       modifiable = false,
     },
     win_options = {
-      winhighlight = "Normal:HerderQFormNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderQFormNormal,FloatBorder:HerderFloatBorder",
       cursorline = true, -- 焦点行高亮：选项区有焦点时可见，聚焦输入行时自然熄灭（loading 态显式关闭）
       wrap = false, -- 折行已在渲染时完成，禁止窗口二次折行错位
       conceallevel = 2, -- 窗口局部：隐去 markdown 记号（##/**/``），渲染后观感
@@ -388,7 +388,7 @@ local function start_ui(initial)
     },
     buf_options = { filetype = "herder-question-input" },
     win_options = {
-      winhighlight = "Normal:HerderQFormNormal,FloatBorder:AiderInputFloatBorder",
+      winhighlight = "Normal:HerderQFormNormal,FloatBorder:HerderFloatBorder",
       wrap = false, -- 输入行横向滚动不折行（表单输入框惯例）
     },
   })

@@ -1,11 +1,32 @@
 local M = {}
 
+-- 合成「浮窗底 + 常规前景」：直接 link NormalFloat 会把弹窗正文染成主题的
+-- 浮窗灰（多数主题 NormalFloat.fg 刻意比 Normal.fg 暗一档，为浮窗次要内容设计），
+-- 故取 NormalFloat.bg + Normal.fg 现算（同 question_form 的 HerderQFormNormal 思路）；
+-- 取不到色（headless/无色主题）则回落 link NormalFloat 保底。
+-- setup 与 ColorScheme 后各算一次，跟随主题切换。
+local function define_float_normal()
+  local ok_f, f = pcall(vim.api.nvim_get_hl, 0, { name = "NormalFloat", link = false })
+  local ok_n, n = pcall(vim.api.nvim_get_hl, 0, { name = "Normal", link = false })
+  local composed = (ok_f and type(f) == "table" and f.bg) and { bg = f.bg } or {}
+  if ok_n and type(n) == "table" and n.fg then
+    composed.fg = n.fg
+  end
+  if next(composed) ~= nil then
+    vim.api.nvim_set_hl(0, "HerderFloatNormal", composed)
+  else
+    vim.api.nvim_set_hl(0, "HerderFloatNormal", { link = "NormalFloat", default = true })
+  end
+end
+
+local hl_autocmd_bound = false
+
 -- UI 高亮的兜底定义（default = true，不覆盖用户/主题已有的定义）
--- 组名沿用原配置（aider 风格），已有主题定义可无缝接管
+-- 组名沿用原配置（aider 风格），已有主题定义可无缝接管；
+-- HerderFloatNormal 例外：不走 link，见上方 define_float_normal
 M.setup_highlights = function()
   local defs = {
-    AiderInputFloatNormal = { link = "NormalFloat" },
-    AiderInputFloatBorder = { link = "FloatBorder" },
+    HerderFloatBorder = { link = "FloatBorder" },
     AiderFolder = { link = "Directory" },
     AiderPromptTitle = { link = "FloatTitle" },
     AiderComment = { link = "Comment" },
@@ -19,6 +40,16 @@ M.setup_highlights = function()
   }
   for name, def in pairs(defs) do
     vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
+  end
+  define_float_normal()
+  -- 主题切换后重算合成色（ColorScheme 在新主题高亮应用后触发）；
+  -- 只绑一次，setup 重复调用不叠加 autocmd
+  if not hl_autocmd_bound then
+    hl_autocmd_bound = true
+    vim.api.nvim_create_autocmd("ColorScheme", {
+      group = vim.api.nvim_create_augroup("HerderAgentsFloatHl", { clear = true }),
+      callback = define_float_normal,
+    })
   end
 end
 
