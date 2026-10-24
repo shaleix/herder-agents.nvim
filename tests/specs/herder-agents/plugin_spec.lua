@@ -28,7 +28,6 @@ describe("plugin setup / keys / commands / notes / context", function()
         new_session = "<leader>hc",
         history = "<leader>hh",
         switch = "<leader>ht",
-        read_buffer = "<leader>hr",
         add_buffer = "<leader>ha",
         note = "<leader>hn",
         line_prompt = "<leader>hp",
@@ -45,7 +44,7 @@ describe("plugin setup / keys / commands / notes / context", function()
     assert.truthy(has_map(" hc", "n"), "<leader>hc 已注册")
     assert.truthy(has_map(" hh", "n"), "<leader>hh 已注册")
     assert.truthy(has_map(" ht", "n"), "<leader>ht 已注册")
-    assert.truthy(has_map(" hr", "n"), "<leader>hr 已注册")
+    assert.truthy(not has_map(" hr", "n"), "read_buffer 键位已随功能移除，不再注册")
     assert.truthy(has_map(" ha", "n"), "<leader>ha 已注册")
     assert.truthy(has_map(" hn", "n"), "<leader>hn (n) 已注册")
     assert.truthy(has_map(" hn", "x"), "<leader>hn (x) 已注册")
@@ -92,10 +91,10 @@ describe("plugin setup / keys / commands / notes / context", function()
     -- api / 会话文件
     plugin.api.add_file("/tmp/herder-agents-smoke.lua")
     local files = plugin.current_session():list_files()
-    assert.truthy(#files.added == 1, "api.add_file 进入会话附件")
-    plugin.current_session():drop_files(files.added)
+    assert.truthy(#files == 1, "api.add_file 进入会话附件")
+    plugin.current_session():drop_files(files)
     files = plugin.current_session():list_files()
-    assert.truthy(#files.added == 0, "drop_files 清空会话附件")
+    assert.truthy(#files == 0, "drop_files 清空会话附件")
 
     -- 手动绑定所需的 API 均存在
     for _, fn in ipairs({
@@ -105,7 +104,6 @@ describe("plugin setup / keys / commands / notes / context", function()
       "new_session",
       "history",
       "switch_tool",
-      "read_buffer",
       "add_buffer",
       "add_note",
       "add_prompt",
@@ -116,15 +114,12 @@ describe("plugin setup / keys / commands / notes / context", function()
       assert.truthy(type(plugin[fn]) == "function", "API ." .. fn .. "() 存在")
     end
 
-    -- hr / ha：当前缓冲区加入附件会话
+    -- ha：当前缓冲区加入附件会话；read_buffer/readonly 已随功能移除
     vim.api.nvim_buf_set_name(0, "/tmp/herder-agents-smoke2.lua")
     plugin.add_buffer()
     files = plugin.current_session():list_files()
-    assert.truthy(#files.added == 1, "add_buffer 把当前缓冲区加入可编辑附件")
-    plugin.current_session():clear_files()
-    plugin.read_buffer()
-    files = plugin.current_session():list_files()
-    assert.truthy(#files.readonly == 1, "read_buffer 把当前缓冲区加入只读附件")
+    assert.truthy(#files == 1, "add_buffer 把当前缓冲区加入附件")
+    assert.truthy(plugin.read_buffer == nil, "read_buffer API 已移除")
     plugin.current_session():clear_files()
 
     -- 备注（notes）：会话 store、勾选态、extmark、格式化、note_range

@@ -399,12 +399,7 @@ local function setup_file_tree(popup, prompt_popup, layout, session)
   })
 
   local function build_nodes()
-    local files_data = session:list_files()
-    local added = files_data.added or {}
-    local readonly = files_data.readonly or {}
-    local all_files = {}
-    vim.list_extend(all_files, added)
-    vim.list_extend(all_files, readonly)
+    local all_files = session:list_files()
 
     local nodes = build_tree_nodes(group_tree_paths(all_files))
 
@@ -570,11 +565,7 @@ end
 
 local function session_files()
   local session = sessions.current_session()
-  local files_data = session:list_files()
-  local all_files = {}
-  vim.list_extend(all_files, files_data.added or {})
-  vim.list_extend(all_files, files_data.readonly or {})
-  return all_files
+  return session:list_files()
 end
 
 local function build_prompt_with_files(value)

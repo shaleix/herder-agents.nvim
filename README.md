@@ -24,7 +24,6 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       new_session = "<leader>hc",
       history = "<leader>hh",
       switch = "<leader>ht",
-      read_buffer = "<leader>hR",
       add_buffer = "<leader>ha",
       note = "<leader>hn",
       line_prompt = "<leader>hp",
@@ -59,8 +58,7 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hc` | new session |
 | `<leader>hh` | prompt history |
 | `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first). Before the relaunch the pane's terminal modes are reset and the input line cleared: an agent that exits without restoring them (kitty keyboard push, SGR mouse reporting, bracketed paste, hidden cursor) leaves the shell encoding real key/mouse events into garbage (`5:1u9;5:1uopencode` → command not found), so the launch command would glue onto the residue and never start |
-| `<leader>ha` | add current buffer as an editable attachment |
-| `<leader>hR` | add current buffer as a **read-only** attachment (`read_buffer()` API) |
+| `<leader>ha` | add current buffer as an attachment |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hp` | inline prompt at the cursor line / selection — `Ctrl+Enter` sends it straight to the agent with a `Target: @file (line N)` locator |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
@@ -479,12 +477,12 @@ cloned into `tmp/` on first run.
 ## API
 
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
-`new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
+`new_session()`, `history()`, `switch_tool()`, `add_buffer()`,
 `add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`, `visible_files()`,
 `shrink_toggle()`,
 `send_prompt(tool, text[, on_done])` (submit without the popup; `on_done(ok, queued)`
 fires after the actual delivery),
-`current_session()` (attachments: `add_files` / `read_files` / `drop_files`).
+`current_session()` (attachments: `add_files` / `drop_files`).
 `require("herder-agents.notes")` is the session note store (`add` / `list` / `checked` /
 `toggle` / `remove` / `clear`).
 `require("herder-agents.ui.chat").append_tool_prompt(tool, text)` puts text into the

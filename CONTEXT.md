@@ -14,7 +14,7 @@
 - **inline input** — 行内输入框，note 编辑与一次性 line prompt 共用。引擎独立成模块 `ui/inline_input.lua`（`M.open(range, opts)`：title/footer/prefill/pane_id/on_save，extmark 虚行缝隙 + bufpos 锚定浮窗）。
 - **prompt history** — 输入弹窗的提示词历史（`ui/history.lua`）：save 按 cwd 追加 `{content, timestamp}`（`config.history_file`，read-modify-write JSON）；load 对缺失/空/损坏容错回空表；`input_history_view` 平铺回看、回车回填。
 - **浮窗合成高亮** — 「NormalFloat.bg + Normal.fg」合成组（`HerderFloatNormal` / `HerderQFormNormal` …）：组合逻辑与 ColorScheme 重算时机统一收口 `ui/common.lua` 的 `define_composed_hl(name)`（注册制、幂等、主题切换统一重绑）；各组件只声明组名。
-- **attachment** — 随提示词发送的文件上下文；唯一格式由 `context.files_block`（`Relate file:`）生成。存储收口 `sessions.lua`：单一有序 entries `{path, mode(added|readonly)}`，路径统一按 `utils.get_relative_path` 归一比较（add/read 翻 mode 不挪位、drop 跨绝对/相对拼写可删），`list_files` 按插入顺序输出 added/readonly 两列。
+- **attachment** — 随提示词发送的文件上下文；唯一格式由 `context.files_block`（`Relate file:`）生成。存储收口 `sessions.lua`：单一有序相对路径表，路径统一按 `utils.get_relative_path` 归一比较（add 去重、drop 跨绝对/相对拼写可删），`list_files` 按插入顺序输出。只读附件通道（read_buffer/readonly 模式）已移除——chat 树与附件块对两种 mode 本就同权。
 - **skill source** — skill 补全列表来源（`tools.<name>.skills`）：api 模式（CLI JSON）或 fs 模式（user/project 目录 + SKILL.md frontmatter，向上到仓库根）；api 与 fs 可共存，api 失败自动回退 fs 并告警一次；api 经临时文件中转（上游管道截断，opencode#52925）；获取层收口在 `skills.lua`，`completion/skills.lua` 仅是 blink 适配层。
 - **LLM adapter** — extraction 调 LLM 的可插拔接口，唯一实现收口在 `llm.lua`；内置默认为 OpenAI 兼容 HTTP（DeepSeek 开箱，`DEEPSEEK_API_KEY`），不依赖任何 LLM 插件（llm.nvim 系补全型插件无任意 prompt API）。
 - **extraction** — 把 agent 终端输出规范化为标准问题 JSON（status/question/options/multiple/suggested）的 LLM 步骤；输入经 `herdr agent read --lines N` 捕获，编排收口在 `question.lua`。

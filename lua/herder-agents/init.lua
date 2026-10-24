@@ -236,10 +236,6 @@ setup_keymaps = function()
     M.switch_tool()
   end, "Switch AI tool")
 
-  map("read_buffer", { "n", "x" }, function()
-    M.read_buffer()
-  end, "AI read current buffer")
-
   map("add_buffer", { "n", "x" }, function()
     M.add_buffer()
   end, "AI add current buffer")
@@ -365,30 +361,14 @@ function M.api.add_current_buffer()
   end
 end
 
-function M.api.read_current_buffer()
-  if vim.bo.buftype == "" then
-    local buffer_path = vim.fn.expand("%:p")
-    require("herder-agents.sessions").current_session():read_files({ buffer_path })
-  end
-end
-
 function M.api.add_file(path)
   require("herder-agents.sessions").current_session():add_files({ path })
   vim.notify("Added file: " .. path, vim.log.levels.INFO)
 end
 
-function M.api.read_file(path)
-  require("herder-agents.sessions").current_session():read_files({ path })
-  vim.notify("Read file: " .. path, vim.log.levels.INFO)
-end
-
 -- 以编程方式添加备注（供外部脚本 / 测试使用）
 function M.api.add_note(path, start_line, end_line, text)
   return require("herder-agents.notes").add(path, start_line, end_line, text)
-end
-
-function M.read_buffer()
-  M.api.read_current_buffer()
 end
 
 function M.add_buffer()
