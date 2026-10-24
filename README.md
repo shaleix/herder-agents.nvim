@@ -179,7 +179,7 @@ require("herder-agents").setup({
     api_key_env = "DEEPSEEK_API_KEY",
     model = "deepseek-chat",
     start_lines = 80,  -- first capture; doubled on need_more
-    max_read_more = 2, -- read-more rounds
+    max_read_more = 3, -- read-more rounds
     retries = 1,       -- invalid-JSON retries (failure reason attached)
     extra_body = nil, -- extra fields deep-merged into the request body last (wins over
                       -- built-ins), e.g. { enable_thinking = false } to turn off thinking

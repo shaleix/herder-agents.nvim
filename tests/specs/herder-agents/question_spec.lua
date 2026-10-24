@@ -69,8 +69,8 @@ describe("agent 提问表单", function()
       "llm 默认 timeout_ms=30000 / temperature=0"
     )
     assert.truthy(
-      cfg.options.llm.start_lines == 80 and cfg.options.llm.max_read_more == 2 and cfg.options.llm.retries == 1,
-      "llm 默认 start_lines=80 / max_read_more=2 / retries=1"
+      cfg.options.llm.start_lines == 80 and cfg.options.llm.max_read_more == 3 and cfg.options.llm.retries == 1,
+      "llm 默认 start_lines=80 / max_read_more=3 / retries=1"
     )
     assert.truthy(
       cfg.options.llm.enabled == true and cfg.options.llm.hint == nil and cfg.options.llm.auto_question == nil,
@@ -708,7 +708,7 @@ describe("agent 提问表单", function()
         and stage_log[2].stage == "extract"
         and stage_log[2].detail == nil
         and stage_log[3].stage == "read_more"
-        and stage_log[3].detail == "1/2",
+        and stage_log[3].detail == "1/3",
       "阶段序列 capture → extract → read_more（detail 携带 N/M）"
     )
     assert.truthy(#form_specs == 1 and form_specs[1].mode == "form", "完成后原位 morph_to form 表单")
@@ -957,8 +957,8 @@ describe("agent 提问表单", function()
         and stage_log[1].stage == "capture"
         and stage_log[2].stage == "extract"
         and stage_log[3].stage == "read_more"
-        and stage_log[3].detail == "1/2",
-      "全真模式阶段流 capture → extract → read_more（detail 1/2）照常展示"
+        and stage_log[3].detail == "1/3",
+      "全真模式阶段流 capture → extract → read_more（detail 1/3）照常展示"
     )
     local dev_body1 = adapter_log[1] and adapter_log[1].user:match("<<<BEGIN>>>\n(.*)\n<<<END>>>")
     local dev_body2 = adapter_log[2] and adapter_log[2].user:match("<<<BEGIN>>>\n(.*)\n<<<END>>>")

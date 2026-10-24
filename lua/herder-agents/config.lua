@@ -234,7 +234,7 @@ M.defaults = {
     timeout_ms = 30000,
     temperature = 0,
     start_lines = 80, -- 首次捕获的终端行数（need_more 时翻倍重读）
-    max_read_more = 2, -- read-more loop 轮数上限（need_more → 翻倍重读重提）
+    max_read_more = 3, -- read-more loop 轮数上限（need_more → 翻倍重读重提；读取上限 = start_lines × 2^此值）
     retries = 1, -- 无效 JSON / HTTP 失败的重试次数（重试附上次失败原因）
     adapter = nil, -- 自定义提取通道：fun(opts, cb)，opts 见 llm.lua（测试注入 / 社区 adapter）
     -- 请求定制（语义仿 neogit ai_commit 的 extra_body / extra_headers / disable_thinking）
