@@ -24,12 +24,15 @@ send prompts from a popup, interrupt, switch tools, all from Neovim.
       new_session = "<leader>hc",
       history = "<leader>hh",
       switch = "<leader>ht",
+      read_buffer = "<leader>hR",
       add_buffer = "<leader>ha",
       note = "<leader>hn",
       line_prompt = "<leader>hp",
       notes_view = "<leader>hr",
       switch_mode = "<leader>hM",
       model = "<leader>hm",
+      question = "<leader>hq",
+      visible_files = "<leader>hv",
       shrink_toggle = "<leader>h<",
     },
   },
@@ -56,12 +59,15 @@ vim.keymap.set("n", "<leader>ho", ha.toggle, { desc = "Toggle AI" })
 | `<leader>hc` | new session |
 | `<leader>hh` | prompt history |
 | `<leader>ht` | switch tool — closes the current agent and restarts the new one in the same herdr pane (`switch_replace`; interrupt a working agent first). Before the relaunch the pane's terminal modes are reset and the input line cleared: an agent that exits without restoring them (kitty keyboard push, SGR mouse reporting, bracketed paste, hidden cursor) leaves the shell encoding real key/mouse events into garbage (`5:1u9;5:1uopencode` → command not found), so the launch command would glue onto the residue and never start |
-| `<leader>ha` | add current buffer as editable attachment (read-only via `read_buffer()` API) |
+| `<leader>ha` | add current buffer as an editable attachment |
+| `<leader>hR` | add current buffer as a **read-only** attachment (`read_buffer()` API) |
 | `<leader>hn` | add a note at the cursor line (visual mode: selection range) |
 | `<leader>hp` | inline prompt at the cursor line / selection — `Ctrl+Enter` sends it straight to the agent with a `Target: @file (line N)` locator |
 | `<leader>hr` | notes popup: review/toggle notes + Extra Prompt, `<CR>` send / `<C-a>` append |
 | `<leader>hM` | switch the agent's mode via herdr (per-tool `mode_switch`: opencode v2 `Shift+Tab` cycles build/plan, codex `/approvals` + focus jump) |
 | `<leader>hm` | switch model — unified flow for every tool: flatten the two-level `tools.<name>.models` config (`provider → models`) into one `provider/model` picker, then apply it per tool: opencode switches **in place** via `opencode api post /api/session/{id}/model` (same call as the in-pane `ctrl+x m` dialog — no restart, works while the agent is running, `#variant` suffixes map to the API `variant` field); tools with a `model_resume` template gracefully quit and relaunch in the same pane (codex: `codex resume <session> -m …`; session ids come from `herdr agent_session` / `opencode api session.list` matched against the pane title). `models` is opt-in; tools without `models` fall back to the `model_switch` key directive (opencode's is the in-pane `ctrl+x m` dialog) |
+| `<leader>hq` | agent question form — same as `:AIQuestion` (see below) |
+| `<leader>hv` | visible files picker — same as `:AIVisibleFiles` (see below) |
 
 In the prompt popup: `Ctrl+Enter` submit · `q`/`Esc` close (draft is kept) ·
 `Ctrl+t` insert symbol path · `Ctrl+d` insert diagnostics · `dd`/`D` drop/clear attachments.
@@ -307,6 +313,7 @@ User autocmds (payloads in `event.data`):
 | `AIPromptSent` | a prompt was delivered | tool, pane_id, submitted, queued |
 | `AIDeliveryFailed` | delivery failed / queue dropped | tool, pane_id, queued, reason |
 | `AIAgentWorking` / `AIAgentIdle` / `AIAgentBlocked` | agent status change (needs `status_poll.enabled = true`) | tool, pane_id, status, cwd |
+| `AIAgentDone` | agent status changed to `done` (same poller; fires on the transition) | tool, pane_id, status, cwd |
 | `AIQuestionShown` | question form content is on screen (form and fallback; fires once per display — not while loading, not on option re-renders, again on form→form re-asks) | mode, questions, win, buf, input_win, input_buf |
 
 Example: react when the agent finishes (opt-in poller):
@@ -369,7 +376,7 @@ opts = {
   },
   -- selection context limits: rejected beyond, never truncated
   context = { max_lines = 500, max_bytes = 65536 },
-  -- opt-in agent status poller -> AIAgentWorking/Idle/Blocked events
+  -- opt-in agent status poller -> AIAgentWorking/Idle/Blocked/Done events
   status_poll = { enabled = false, interval_ms = 2000 },
   icons = { note = "󰆈" }, -- gutter sign for notes (nf-md-comment_text; "" disables the sign)
   notes = {
@@ -472,6 +479,7 @@ cloned into `tmp/` on first run.
 `require("herder-agents")` returns: `toggle([tool])`, `input([draft])`, `interrupt()`,
 `new_session()`, `history()`, `switch_tool()`, `read_buffer()`, `add_buffer()`,
 `add_note()`, `notes_view()`, `switch_mode()`, `switch_model()`, `visible_files()`,
+`shrink_toggle()`,
 `send_prompt(tool, text[, on_done])` (submit without the popup; `on_done(ok, queued)`
 fires after the actual delivery),
 `current_session()` (attachments: `add_files` / `read_files` / `drop_files`).

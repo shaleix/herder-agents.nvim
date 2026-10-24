@@ -169,7 +169,7 @@ M.exec_async = function(argv, on_done)
 end
 
 -- ---------------------------------------------------------------------------
--- 临时文件中转执行（skills api 专用）：`opencode api skill.list` 等大响应 CLI
+-- 临时文件中转执行（skills api 与 llm HTTP 传输共用，见 llm.lua）：`opencode api skill.list` 等大响应 CLI
 -- 经管道输出偶发被截断 —— Bun 的 pipe 写入是异步的，CLI 先 process.exit() 导致
 -- 缓冲未刷出（退出码仍 0、JSON 不完整；~548KB/65 技能级别必现）。上游 issue
 -- anomalyco/opencode#52925，修复 PR #52955（截至 2026-10 未合并）。文件重定向

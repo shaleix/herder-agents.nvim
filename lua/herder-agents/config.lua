@@ -272,8 +272,8 @@ M.defaults = {
     max_bytes = 65536,
   },
 
-  -- agent 状态轮询 → User 事件（AIAgentWorking / AIAgentIdle / AIAgentBlocked，
-  -- payload 在 event.data）。每 tick 起一个 herdr 子进程，默认关闭，按需开启；
+  -- agent 状态轮询 → User 事件（AIAgentWorking / AIAgentIdle / AIAgentBlocked /
+  -- AIAgentDone，payload 在 event.data）。每 tick 起一个 herdr 子进程，默认关闭，按需开启；
   -- 开启后可做 "agent 完成 → 自动 format / 关 pane" 之类的自动化
   status_poll = {
     enabled = false,
