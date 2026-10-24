@@ -1,11 +1,16 @@
 local M = {}
 
--- 合成「浮窗底 + 常规前景」：直接 link NormalFloat 会把弹窗正文染成主题的
+-- 合成组注册表：所有「浮窗底 + 常规前景」式合成组（浮窗的 HerderFloatNormal、
+-- question_form 的 HerderQFormNormal …）共享同一套组合逻辑与重算时机——
+-- 各组件只管注册组名，主题切换由共享 ColorScheme autocmd 统一重算
+local composed_registry = {}
+
+-- 现算并定义一个合成组：直接 link NormalFloat 会把弹窗正文染成主题的
 -- 浮窗灰（多数主题 NormalFloat.fg 刻意比 Normal.fg 暗一档，为浮窗次要内容设计），
--- 故取 NormalFloat.bg + Normal.fg 现算（同 question_form 的 HerderQFormNormal 思路）；
+-- 故取 NormalFloat.bg + Normal.fg 现算；
 -- 取不到色（headless/无色主题）则回落 link NormalFloat 保底。
 -- setup 与 ColorScheme 后各算一次，跟随主题切换。
-local function define_float_normal()
+local function compose_hl(name)
   local ok_f, f = pcall(vim.api.nvim_get_hl, 0, { name = "NormalFloat", link = false })
   local ok_n, n = pcall(vim.api.nvim_get_hl, 0, { name = "Normal", link = false })
   local composed = (ok_f and type(f) == "table" and f.bg) and { bg = f.bg } or {}
@@ -13,17 +18,28 @@ local function define_float_normal()
     composed.fg = n.fg
   end
   if next(composed) ~= nil then
-    vim.api.nvim_set_hl(0, "HerderFloatNormal", composed)
+    vim.api.nvim_set_hl(0, name, composed)
   else
-    vim.api.nvim_set_hl(0, "HerderFloatNormal", { link = "NormalFloat", default = true })
+    vim.api.nvim_set_hl(0, name, { link = "NormalFloat", default = true })
   end
+end
+
+-- 合成组注册入口（幂等：重复注册同名 no-op）：首次注册立即定义一次；
+-- 此后主题切换由 setup_highlights 绑定的共享 ColorScheme autocmd 重算全部
+-- 注册名（含弹窗打开晚于 colorscheme 切换后再次打开时经本入口重定义）
+M.define_composed_hl = function(name)
+  if composed_registry[name] then
+    return
+  end
+  composed_registry[name] = true
+  compose_hl(name)
 end
 
 local hl_autocmd_bound = false
 
 -- UI 高亮的兜底定义（default = true，不覆盖用户/主题已有的定义）
 -- 组名沿用原配置（aider 风格），已有主题定义可无缝接管；
--- HerderFloatNormal 例外：不走 link，见上方 define_float_normal
+-- HerderFloatNormal 例外：不走 link，见上方 compose_hl
 M.setup_highlights = function()
   local defs = {
     HerderFloatBorder = { link = "FloatBorder" },
@@ -41,14 +57,18 @@ M.setup_highlights = function()
   for name, def in pairs(defs) do
     vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
   end
-  define_float_normal()
-  -- 主题切换后重算合成色（ColorScheme 在新主题高亮应用后触发）；
+  M.define_composed_hl("HerderFloatNormal")
+  -- 主题切换后重算全部已注册合成色（ColorScheme 在新主题高亮应用后触发）；
   -- 只绑一次，setup 重复调用不叠加 autocmd
   if not hl_autocmd_bound then
     hl_autocmd_bound = true
     vim.api.nvim_create_autocmd("ColorScheme", {
       group = vim.api.nvim_create_augroup("HerderAgentsFloatHl", { clear = true }),
-      callback = define_float_normal,
+      callback = function()
+        for name in pairs(composed_registry) do
+          compose_hl(name)
+        end
+      end,
     })
   end
 end

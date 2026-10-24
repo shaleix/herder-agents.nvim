@@ -133,21 +133,11 @@ local current_close = nil
 -- 本组件局部高亮（default=true 幂等定义，不改动 ui/common.lua）；
 -- 选中/未选中沿用 Notes 勾选框的 String/LineNr 色系，保持插件内同一视觉语言
 local function ensure_highlights()
-  -- 合成「浮窗底 + 常规前景」：脱离 winhighlight 对 Normal 的窗口级重映射——
-  -- 直接 link Normal 的组在该窗口内会被解析回浮窗灰（winhl 覆盖 Normal 本身），
-  -- 故用 NormalFloat.bg + Normal.fg 现算（每次打开重算，跟随 colorscheme）；
-  -- 取不到色（极端 headless/无色主题）则回落 NormalFloat 保底
-  local ok_f, f = pcall(vim.api.nvim_get_hl, 0, { name = "NormalFloat", link = false })
-  local ok_n, n = pcall(vim.api.nvim_get_hl, 0, { name = "Normal", link = false })
-  local composed = (ok_f and type(f) == "table" and f.bg) and { bg = f.bg } or {}
-  if ok_n and type(n) == "table" and n.fg then
-    composed.fg = n.fg
-  end
-  if next(composed) ~= nil then
-    vim.api.nvim_set_hl(0, "HerderQFormNormal", composed)
-  else
-    vim.api.nvim_set_hl(0, "HerderQFormNormal", { link = "NormalFloat", default = true })
-  end
+  -- 合成「浮窗底 + 常规前景」收口到 ui/common.lua 的 define_composed_hl
+  --（组合逻辑与回落策略的说明见彼处 compose_hl）：这里只注册组名 + 立即定义
+  -- 一次（每次打开幂等重入），主题切换重算由 common 内共享的 ColorScheme
+  -- autocmd 统一承担，本组件不再各管一份组合逻辑
+  require("herder-agents.ui.common").define_composed_hl("HerderQFormNormal")
   local defs = {
     HerderQFormQuestion = { link = "Title" }, -- 节头 ❓ 行 / fallback 原文：主题标题色（多主题 bold+彩色）
     HerderQFormText = { link = "HerderQFormNormal" }, -- 正文（题干/选项文字）：常规前景 + 浮窗底（合成组，见上）
@@ -496,19 +486,12 @@ local function start_ui(initial)
     end
     local rows = build_rows()
     local lines = {}
-    row_meta, q_first_row, q_opt_first_row = {}, {}, {}
+    -- 导航索引收口 rows.index（纯函数，spec 直测）：物理行元数据 / 题号 → 首个
+    -- 内容行 / 题号·选项索引 → 首个选项行
+    local ix = rows_mod.index(rows)
+    row_meta, q_first_row, q_opt_first_row = ix.row_meta, ix.q_first_row, ix.q_opt_first_row
     for i, r in ipairs(rows) do
       lines[i] = r.text
-      row_meta[i] = { kind = r.kind, q = r.q, opt = r.opt }
-      if r.q and r.kind ~= "divider" and not q_first_row[r.q] then
-        q_first_row[r.q] = i
-      end
-      if r.kind == "option" and r.q then
-        q_opt_first_row[r.q] = q_opt_first_row[r.q] or {}
-        if not q_opt_first_row[r.q][r.opt] then
-          q_opt_first_row[r.q][r.opt] = i
-        end
-      end
     end
     vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -931,7 +914,7 @@ local function start_ui(initial)
     -- 输入行（normal+insert）：Enter = 提交自定义（生成/更新该题正式选项）；
     -- Tab/S-Tab → 回到绑定题的选项区（草稿保留）；<C-Enter> 提交整个表单；
     -- form 态 Esc 关输入框、保留草稿（回到选项区，误触不丢字），fallback 态
-    -- Esc 直接取消（同内联输入缝隙 inline_input_gap 的插入模式 Esc 语义）；
+    -- Esc 直接取消（同内联输入缝隙 ui/inline_input 的插入模式 Esc 语义）；
     -- q/C-q 任意形态均整表取消（显式放弃，不保草稿）
     input_popup:map("n", "<Tab>", focus_options_for_input, mapOpts)
     input_popup:map("n", "<S-Tab>", focus_options_for_input, mapOpts)

@@ -180,4 +180,31 @@ function M.build(view, inner)
   return rows
 end
 
+-- 导航索引（纯函数，spec 直测）：M.build 产出的渲染行序列 → shell 消费的
+-- 导航索引表，render 每次切换后重建。返回 { row_meta, q_first_row, q_opt_first_row }：
+--   row_meta[i] = { kind, q, opt }  -- 物理行 → 行元数据（光标行判定用）
+--   q_first_row[k] = i              -- 题号 → 该节首个内容行（只跳过分割线，
+--                                   --   空行/题头/desc 均算内容行）
+--   q_opt_first_row[k][i] = i       -- 题号 → 选项索引 → 该项首个物理行
+--                                   --   （折行多段只计首段；含自定义选项）
+-- q_first_row / q_opt_first_row 只在行携带 q 时填充——fallback raw 行（q=nil）
+-- 不进任何索引；同一 (q[, opt]) 重复出现（折行续行）保留首个物理行。
+-- meta_at_cursor / Tab 跳转 / 未答拦截定位 / 初始光标均消费本索引。
+function M.index(rows)
+  local row_meta, q_first_row, q_opt_first_row = {}, {}, {}
+  for i, r in ipairs(rows) do
+    row_meta[i] = { kind = r.kind, q = r.q, opt = r.opt }
+    if r.q and r.kind ~= "divider" and not q_first_row[r.q] then
+      q_first_row[r.q] = i
+    end
+    if r.kind == "option" and r.q then
+      q_opt_first_row[r.q] = q_opt_first_row[r.q] or {}
+      if not q_opt_first_row[r.q][r.opt] then
+        q_opt_first_row[r.q][r.opt] = i
+      end
+    end
+  end
+  return { row_meta = row_meta, q_first_row = q_first_row, q_opt_first_row = q_opt_first_row }
+end
+
 return M
