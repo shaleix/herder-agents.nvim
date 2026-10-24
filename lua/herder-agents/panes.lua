@@ -182,23 +182,31 @@ local function herdr_cli_new_session(name, tool)
   end
 end
 
--- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI）
-local function poll(cond, interval_ms, max_ticks, on_done)
-  local tick = 0
-  local function step()
-    tick = tick + 1
-    local ok, res = pcall(cond, tick)
-    if ok and res then
-      on_done(true)
-      return
-    end
-    if tick >= max_ticks then
-      on_done(false)
-      return
-    end
-    vim.defer_fn(step, interval_ms)
-  end
-  vim.defer_fn(step, interval_ms)
+-- ---------------------------------------------------------------------------
+-- 终端模式复位（agent 退出后、重启/切换新 agent 前调用；唯一调用方在下方
+-- relaunch 序列，故收敛为本模块私有函数）
+--
+-- 部分 agent TUI（如 codex）退出时不恢复终端私有模式：kitty keyboard
+-- protocol（push 未 pop）、SGR 鼠标上报 1000/1002/1003/1006、bracketed paste
+-- 2004、隐藏光标等。pane 落回 shell 后 herdr 仍按这些模式把真实按键/鼠标事件
+-- 编码成转义序列塞进输入行（"5:1u9;5:1uopencode"；鼠标划过 pane 持续追加
+-- "35;4;45M…"），重启命令与残留字节粘连 → command not found → 新 agent 起不来。
+--
+-- 这些模式只能由 pane 内进程向 tty 输出侧写转义序列关闭（send-text/send-keys
+-- 走输入侧，直接发复位序列只会变成输入乱码），因此让 shell 执行一条 printf：
+--   - 载荷以 \r 开头：先把已被污染的当前行提交掉（乱码行只会 command not
+--     found，无害）；清行与命令在同一次 send-text 写入中原子到达，不会与
+--     源源涌入的鼠标事件交错粘连
+--   - printf 向输出侧写复位序列（\e 以字面文本传输、由 printf 转成真实 ESC）
+-- @param pane_id string 目标 pane
+-- @return boolean send-text 是否成功（以退出码判定）
+-- ---------------------------------------------------------------------------
+local function reset_pane_terminal(pane_id)
+  local seqs = "\\e[<u\\e[<u" -- kitty keyboard pop ×2（多余 pop 为空操作，兜底未配对的 push）
+    .. "\\e[?1000l\\e[?1002l\\e[?1003l\\e[?1006l" -- 关闭 SGR 鼠标上报
+    .. "\\e[?2004l" -- 关闭 bracketed paste
+    .. "\\e[?25h" -- 恢复光标显示
+  return utils.exec({ "herdr", "pane", "send-text", pane_id, "\rprintf '" .. seqs .. "'\r" }).code == 0
 end
 
 -- 统一重启序列（收敛原 replace_tool 的 launch_new 与 model_restart 的 launch）：
@@ -216,7 +224,7 @@ function M.relaunch(pane_id, cmd, opts, on_ready)
   -- （"5:1u9;5:1uopencode" → command not found）。这些模式只能由 pane 内
   -- 进程写 tty 输出侧复位 —— 先让 shell 执行一条 printf 复位载荷
   --（自带前导 \r，与被污染行原子隔离），再启动新 agent
-  utils.reset_pane_terminal(pane_id)
+  reset_pane_terminal(pane_id)
   vim.defer_fn(function()
     -- 复位生效后不再产生新的事件污染；printf 执行前排队迟到的事件再补一次
     -- ctrl+c 清行，保证启动命令落在一个干净的提示符上
@@ -232,7 +240,7 @@ function M.relaunch(pane_id, cmd, opts, on_ready)
       utils.herdr_json("pane", "rename", pane_id, opts.rename)
     end
     -- 就绪判断以前台进程为准（herdr 的 agent 集成检测有秒级延迟）
-    poll(
+    utils.poll(
       function()
         return delivery.pane_agent_running(pane_id) == true
       end,
@@ -554,7 +562,7 @@ function M.replace(old_name, new_name)
   if fgid then
     vim.fn.system({ "kill", "-TERM", "-" .. tostring(fgid) })
   end
-  poll(
+  utils.poll(
     function()
       local r = delivery.pane_agent_running(pane_id)
       return r == false or r == nil
@@ -571,7 +579,7 @@ function M.replace(old_name, new_name)
       if fg2 then
         vim.fn.system({ "kill", "-KILL", "-" .. tostring(fg2) })
       end
-      poll(
+      utils.poll(
         function()
           local r = delivery.pane_agent_running(pane_id)
           return r == false or r == nil

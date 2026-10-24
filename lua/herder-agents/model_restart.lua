@@ -28,25 +28,6 @@ local panes = require("herder-agents.panes")
 local config = require("herder-agents.config")
 local delivery = require("herder-agents.delivery")
 
--- 轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI）
-local function poll(cond, interval_ms, max_ticks, on_done)
-  local tick = 0
-  local function step()
-    tick = tick + 1
-    local ok, res = pcall(cond, tick)
-    if ok and res then
-      on_done(true)
-      return
-    end
-    if tick >= max_ticks then
-      on_done(false)
-      return
-    end
-    vim.defer_fn(step, interval_ms)
-  end
-  vim.defer_fn(step, interval_ms)
-end
-
 -- 两级 { [provider] = { model, ... } } 平铺为 "provider/model" 单层候选；
 -- map 遍历顺序不确定，排序保证列表稳定
 local function flatten_models(models)
@@ -181,7 +162,7 @@ local function quit_agent(pane_id, quit_cmd, on_done)
   end
   send_quit()
   -- agent 退出需等待 MCP/hook 清理，网络不佳时可达数十秒
-  poll(
+  utils.poll(
     function(tick)
       if pane_agent_gone(pane_id) then
         return true
@@ -201,7 +182,7 @@ local function quit_agent(pane_id, quit_cmd, on_done)
       end
       -- quit 未生效（例如任务运行中弹了确认框），ctrl+c 兜底再等一轮
       utils.herdr_json("pane", "send-keys", pane_id, "ctrl+c")
-      poll(
+      utils.poll(
         function()
           return pane_agent_gone(pane_id)
         end,

@@ -13,29 +13,54 @@ describe("终端复位 / 模型切换 / 工具切换", function()
     local argv_log = {} -- 原单文件内与共享段的记录表；本段仅在假执行器里写入、不读取
 
     -- ---------------------------------------------------------------------------
-    -- 终端模式复位（utils.reset_pane_terminal）：agent 退出后遗留 kitty keyboard /
+    -- 终端模式复位（panes.relaunch 内置步骤，私有函数）：agent 退出后遗留 kitty keyboard /
     -- SGR 鼠标上报等终端模式，输入行被编码后的按键/鼠标事件持续污染
     -- （"5:1u9;5:1uopencode" → command not found）。复位序列只能由 pane 内 shell
     -- 执行 printf 写 tty 输出侧关闭，且必须单次 send-text 原子送达（前导 \r
     -- 无害提交已被污染的当前行，避免与涌入的鼠标事件交错粘连）
     -- ---------------------------------------------------------------------------
     local reset_argv = nil
+    local run_after_reset = nil -- 复位先于 pane run 到达（同链路顺序断言用）
+    local relaunch_done = false
     utils.set_exec(function(argv)
       if argv[2] == "pane" and argv[3] == "send-text" then
         reset_argv = argv
       end
+      if argv[2] == "pane" and argv[3] == "run" then
+        run_after_reset = reset_argv ~= nil
+      end
+      if argv[2] == "pane" and argv[3] == "process-info" then
+        -- 就绪轮询首次即命中前台进程，relaunch 链快速收尾不拖慢用例
+        return {
+          code = 0,
+          stdout = vim.json.encode({
+            result = {
+              process_info = {
+                shell_pid = 1,
+                foreground_processes = { { pid = 2, name = "opencode" } },
+                foreground_process_group_id = 2,
+              },
+            },
+          }),
+        }
+      end
       return { code = 0, stdout = "" }
     end)
-    assert.truthy(
-      utils.reset_pane_terminal("p-x") == true,
-      "终端复位经 pane send-text 发送，以退出码判定"
-    )
+    panes.relaunch("p-x", { "opencode" }, nil, function()
+      relaunch_done = true
+    end)
+    assert.truthy(reset_argv ~= nil, "relaunch 内置终端复位经 pane send-text 发送")
     assert.truthy(
       reset_argv ~= nil
         and reset_argv[4] == "p-x"
         and reset_argv[5] == "\rprintf '\\e[<u\\e[<u\\e[?1000l\\e[?1002l\\e[?1003l\\e[?1006l\\e[?2004l\\e[?25h'\r",
       "复位载荷：前导 \\r + printf 关 kitty pop×2/鼠标/bracketed paste/恢复光标"
     )
+    -- 等 relaunch 异步链（defer 后 pane run + 就绪轮询）收尾，避免泄漏进后续段
+    vim.wait(3000, function()
+      return relaunch_done
+    end, 20)
+    assert.truthy(relaunch_done and run_after_reset, "复位载荷先于 pane run 送达，链路收尾")
     utils.set_exec(nil)
 
     -- ---------------------------------------------------------------------------

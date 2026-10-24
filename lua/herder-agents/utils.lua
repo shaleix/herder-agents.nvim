@@ -269,6 +269,28 @@ M.exec_async_to_file = function(argv, on_done, timeout_ms)
 end
 
 -- ---------------------------------------------------------------------------
+-- 轮询等待：轮询直到 cond(tick) 为真；超 max_ticks 次后以 false 结束（不阻塞 UI）
+-- （panes/model_restart 的等待时序共用：退出轮询 / 就绪轮询均走此实现）
+-- ---------------------------------------------------------------------------
+M.poll = function(cond, interval_ms, max_ticks, on_done)
+  local tick = 0
+  local function step()
+    tick = tick + 1
+    local ok, res = pcall(cond, tick)
+    if ok and res then
+      on_done(true)
+      return
+    end
+    if tick >= max_ticks then
+      on_done(false)
+      return
+    end
+    vim.defer_fn(step, interval_ms)
+  end
+  vim.defer_fn(step, interval_ms)
+end
+
+-- ---------------------------------------------------------------------------
 -- nvim 所在 herdr workspace：只认 herdr 在 pane 内注入的环境变量
 -- HERDR_WORKSPACE_ID（无 CLI 回退）。fail-open 约定（status.lua 的先例）：
 -- 未设置/为空返回 nil，调用方不过滤 —— nvim 不在 herdr 内时保持原有全量行为
@@ -354,32 +376,6 @@ function M.pick(entries, prompt, on_select)
     M.warn("fzf picker failed: " .. tostring(err))
   end
   vim.ui.select(entries, { prompt = prompt }, on_select)
-end
-
--- ---------------------------------------------------------------------------
--- 终端模式复位（agent 退出后、重启/切换新 agent 前调用）
---
--- 部分 agent TUI（如 codex）退出时不恢复终端私有模式：kitty keyboard
--- protocol（push 未 pop）、SGR 鼠标上报 1000/1002/1003/1006、bracketed paste
--- 2004、隐藏光标等。pane 落回 shell 后 herdr 仍按这些模式把真实按键/鼠标事件
--- 编码成转义序列塞进输入行（"5:1u9;5:1uopencode"；鼠标划过 pane 持续追加
--- "35;4;45M…"），重启命令与残留字节粘连 → command not found → 新 agent 起不来。
---
--- 这些模式只能由 pane 内进程向 tty 输出侧写转义序列关闭（send-text/send-keys
--- 走输入侧，直接发复位序列只会变成输入乱码），因此让 shell 执行一条 printf：
---   - 载荷以 \r 开头：先把已被污染的当前行提交掉（乱码行只会 command not
---     found，无害）；清行与命令在同一次 send-text 写入中原子到达，不会与
---     源源涌入的鼠标事件交错粘连
---   - printf 向输出侧写复位序列（\e 以字面文本传输、由 printf 转成真实 ESC）
--- @param pane_id string 目标 pane
--- @return boolean send-text 是否成功（以退出码判定）
--- ---------------------------------------------------------------------------
-M.reset_pane_terminal = function(pane_id)
-  local seqs = "\\e[<u\\e[<u" -- kitty keyboard pop ×2（多余 pop 为空操作，兜底未配对的 push）
-    .. "\\e[?1000l\\e[?1002l\\e[?1003l\\e[?1006l" -- 关闭 SGR 鼠标上报
-    .. "\\e[?2004l" -- 关闭 bracketed paste
-    .. "\\e[?25h" -- 恢复光标显示
-  return M.exec({ "herdr", "pane", "send-text", pane_id, "\rprintf '" .. seqs .. "'\r" }).code == 0
 end
 
 -- 文本结尾是否处于 @文件 / $技能 补全态：注入此类文本后 TUI 会保持补全弹层
