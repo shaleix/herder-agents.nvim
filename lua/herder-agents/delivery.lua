@@ -65,8 +65,16 @@ end
 -- agent 集成通道探测：pane 是否为 herdr 已注册的 agent。
 -- 返回 channel（"agent"|"text"）与 agent_status（仅 agent 通道有值）。
 -- agent list 查询失败按文本通道处理（pane 判活仍走 process-info）
-local function probe_channel(pane_id)
-  if dcfg().agent_channel == false then
+-- channel_override（per-call 通道覆写，见 M.deliver）：
+--   "text"  → 钉死文本通道（不看配置、不查注册表）
+--   "agent" → 钉死 agent 通道意图：跳过配置开关，仍以注册表为准
+--             （未注册 pane / 查询失败回退文本通道）
+--   nil     → 跟随 delivery.agent_channel 配置（原语义不变）
+local function probe_channel(pane_id, channel_override)
+  if channel_override == "text" then
+    return "text", nil
+  end
+  if channel_override ~= "agent" and dcfg().agent_channel == false then
     return "text", nil
   end
   local list = utils.herdr_json("agent", "list")
@@ -97,9 +105,10 @@ end
 -- 1) agent 通道：状态为 idle/working/unknown —— herdr 状态机的精确信号
 --    （unknown 仅屏幕识别型 agent 出现，见 agent_status_ready；经 settle
 --    复查后提交，语义安全）
--- 2) 文本通道（未注册 / 自定义工具 / 通道关闭）：前台进程启发式（原实现）
-local function check(pane_id)
-  local channel, status = probe_channel(pane_id)
+-- 2) 文本通道（未注册 / 自定义工具 / 通道关闭 / per-call 钉死 text）：
+--    前台进程启发式（原实现）
+local function check(pane_id, channel_override)
+  local channel, status = probe_channel(pane_id, channel_override)
   if channel == "agent" then
     return agent_status_ready(status), channel, status
   end
@@ -209,8 +218,19 @@ local function flush(pane_id, queued)
     state[pane_id] = nil
     return
   end
-  -- flush 时再探一次通道：settle 窗口里 herdr 可能刚完成注册，赶上 agent 通道
-  local use_agent = probe_channel(pane_id) == "agent"
+  -- flush 时再探一次通道：settle 窗口里 herdr 可能刚完成注册，赶上 agent 通道。
+  -- per-call 覆写随排队 item 保留：钉死 text 的条目不回 agent 通道；agent 钉死 /
+  -- 跟随配置的条目按各自意图复探（同一 flush 内按意图 memoize，各探一次）
+  local memo = {}
+  local function use_agent_for(item)
+    local key = item.channel or "config"
+    local cached = memo[key]
+    if cached == nil then
+      cached = probe_channel(pane_id, item.channel) == "agent"
+      memo[key] = cached
+    end
+    return cached
+  end
   local index = 0
   local function run_next()
     index = index + 1
@@ -221,7 +241,7 @@ local function flush(pane_id, queued)
       end
       return
     end
-    dispatch_item(item, use_agent, queued, run_next)
+    dispatch_item(item, use_agent_for(item), queued, run_next)
   end
   run_next()
 end
@@ -243,6 +263,9 @@ local function kick(pane_id)
   local warn_after = d.warn_after_ms or 5000
   local gone_retries = math.max(1, d.pane_gone_retries or 3)
   local wait_chunk = math.max(interval, d.agent_wait_chunk_ms or 2000)
+  -- 轮询期间的通道意图取队首 item 的 per-call 覆写（nil 跟随配置）；轮询中
+  -- 队首不变（新 deliver 只追加队尾），flush 时逐条按 item 意图复探（见 flush）
+  local channel_override = st.items[1] and st.items[1].channel or nil
   st.polling = true
   local waited = 0
   local step -- 前向声明：settle_then_flush 需要捕获本 upvalue
@@ -265,7 +288,7 @@ local function kick(pane_id)
       if not st.polling or #st.items == 0 then
         return
       end
-      if check(pane_id) == true then
+      if check(pane_id, channel_override) == true then
         flush(pane_id, true)
       else
         vim.defer_fn(step, interval)
@@ -280,7 +303,7 @@ local function kick(pane_id)
       end
       return
     end
-    local ready, channel = check(pane_id)
+    local ready, channel = check(pane_id, channel_override)
     if ready == nil then
       st.fail_streak = st.fail_streak + 1
       if st.fail_streak >= gone_retries then
@@ -337,10 +360,17 @@ end
 --- 把文本投递到 pane：就绪则立即发送，否则排队等就绪。
 --- opts: { submit_key?: string（"enter" 走 agent prompt，其余走文本通道）,
 ---         paste_wrap?: boolean（文本通道是否 bracketed paste 编码）,
+---         channel?: "text"|"agent"（per-call 通道覆写：钉死本次投递的通道，
+---           nil 跟随 delivery.agent_channel 配置；覆写随排队 item 保留，
+---           就绪重试不改道 —— 问答提交钉死文本通道即走此参数，ADR-0002 §3）,
 ---         on_done?: fun(ok: boolean, queued: boolean) }
 --- 返回 true 表示已发送 / 已受理（agent 通道异步）/ 已排队；false 表示立即投递失败
 function M.deliver(pane_id, tool, text, opts)
   opts = opts or {}
+  local channel_override = opts.channel
+  if channel_override ~= "text" and channel_override ~= "agent" then
+    channel_override = nil
+  end
   local item = {
     pane_id = pane_id,
     tool = tool,
@@ -348,12 +378,13 @@ function M.deliver(pane_id, tool, text, opts)
     submit_key = opts.submit_key,
     on_done = opts.on_done,
     paste_wrap = opts.paste_wrap == true,
+    channel = channel_override,
   }
   if dcfg().enabled == false then
     -- 排队关闭：直接文本通道发送（旧版即发即忘行为，保留退出码判定）
     return dispatch_item(item, false, false)
   end
-  local ready, channel, status = check(pane_id)
+  local ready, channel, status = check(pane_id, channel_override)
   if ready == true then
     -- agent 通道的 unknown"就绪"带不确定性（可能是 TUI 启动中、或弹窗尚未
     -- 被识别成 blocked 的短窗口），不立即提交：交给排队路径的 settle 复查

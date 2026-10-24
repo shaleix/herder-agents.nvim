@@ -180,33 +180,21 @@ end
 
 --- 表单提交 → delivery 文本通道送回该 agent。
 --- agent blocked 时 `herdr agent prompt` 会以 agent_blocked 拒收，必须走
---- send-text + 括号粘贴 + 提交键；这里复用 delivery 自身的 agent_channel=false
---- escape hatch（README 文档化开关）圈定【本次】投递走文本通道 —— deliver 的
---- 立即文本路径全程同步完成（send-text → send-keys → on_done），flip 在
---- on_done 即恢复，不影响其他并发投递，也不改 delivery 既有行为；队列语义
---- 原样保留（pane 消失 / 未就绪仍走排队与丢弃）
+--- send-text + 括号粘贴 + 提交键；deliver 的 per-call channel 参数把【本次】
+--- 投递钉死在文本通道（ADR-0002 §3），config 的 agent_channel 不被触碰、
+--- 其他并发投递不受影响；队列语义原样保留（pane 消失 / 未就绪仍走排队与
+--- 丢弃，排队重试同样钉死文本通道不改道）
 function M.submit(pane_id, tool, text)
   if not text or text == "" then
     return false
   end
   local delivery = require("herder-agents.delivery")
-  local dcfg = config.options.delivery or {}
   local tool_cfg = (config.options.tools or {})[tool] or {}
-  local saved = dcfg.agent_channel
-  dcfg.agent_channel = false -- 本次强制文本通道（见上）
-  local ok, res = pcall(delivery.deliver, pane_id, tool, text, {
+  return delivery.deliver(pane_id, tool, text, {
     submit_key = "enter",
     paste_wrap = tool_cfg.paste_wrap == true,
-    on_done = function()
-      dcfg.agent_channel = saved -- 所有投递路径（含排队丢弃）都以 on_done 收尾
-    end,
+    channel = "text",
   })
-  if not ok then
-    dcfg.agent_channel = saved
-    utils.err("answer delivery failed: " .. tostring(res))
-    return false
-  end
-  return res
 end
 
 -- 公共编排（M.ask 与 M.ask_dev 全真模式共用）：loading 骨架句柄由调用方入场前

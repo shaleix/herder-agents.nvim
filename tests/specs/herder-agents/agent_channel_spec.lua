@@ -15,6 +15,9 @@ describe("delivery agent 集成通道", function()
     local fake_agents = {} -- pane_id -> agent_status
     local fake_ws = "w-test" -- 假 agent 的 workspace_id
     local argv_log = {}
+    -- 文本通道就绪控制（per-call channel 用例）：text_pending[pane_id] = n 表示
+    -- 前 n 次 process-info 查询该 pane 前台只有 shell（未就绪），之后转为就绪
+    local text_pending = {}
     utils.set_exec(function(argv)
       table.insert(argv_log, argv)
       if argv[2] == "agent" and argv[3] == "list" then
@@ -31,6 +34,22 @@ describe("delivery agent 集成通道", function()
         return { code = 0, stdout = vim.json.encode({ result = { agents = agents } }) }
       end
       if argv[2] == "pane" and argv[3] == "process-info" then
+        local left = text_pending[argv[5]]
+        if left and left > 0 then
+          text_pending[argv[5]] = left - 1
+          return {
+            code = 0,
+            stdout = vim.json.encode({
+              result = {
+                process_info = {
+                  shell_pid = 1,
+                  foreground_processes = {},
+                  foreground_process_group_id = 1,
+                },
+              },
+            }),
+          }
+        end
         return {
           code = 0,
           stdout = vim.json.encode({
@@ -217,6 +236,106 @@ describe("delivery agent 集成通道", function()
         return argv[3] == "send-text"
       end),
       "agent_channel=false 回退 send-text"
+    )
+    config_mod.options.delivery.agent_channel = true
+
+    -- 5b) per-call opts.channel = "text"：config agent_channel=true 也钉死文本通道
+    --     （ADR-0002 §3：问答提交必须走文本通道；config 开关不被触碰）
+    delivery._reset()
+    fake_agents = { ["p-pin-text"] = "idle" }
+    argv_log = {}
+    local pin_text_done = nil
+    delivery.deliver("p-pin-text", "codex", "pinned\nanswer", {
+      submit_key = "enter",
+      paste_wrap = true,
+      channel = "text",
+      on_done = function(ok)
+        pin_text_done = ok
+      end,
+    })
+    assert.truthy(pin_text_done == true, "channel=text 同步走完文本路径（on_done 即回调）")
+    assert.truthy(not argv_contains(function(argv)
+      return argv[3] == "prompt"
+    end), "channel=text 不走 agent prompt（config 仍为 true）")
+    assert.truthy(not argv_contains(function(argv)
+      return argv[2] == "agent" and argv[3] == "list"
+    end), "channel=text 连 agent 注册表都不查（钉死短路）")
+    local pin_sent = nil
+    for _, argv in ipairs(argv_log) do
+      if argv[3] == "send-text" then
+        pin_sent = argv[5]
+      end
+    end
+    assert.truthy(
+      pin_sent ~= nil and pin_sent:find("\27[200~", 1, true) ~= nil,
+      "channel=text 经 send-text（保留 bracketed paste 编码）"
+    )
+    assert.truthy(config_mod.options.delivery.agent_channel == true, "config agent_channel 未被改动")
+
+    -- 5c) 排队存活：channel=text 的排队项就绪重试后仍走文本通道（不改道 agent）
+    delivery._reset()
+    fake_agents = { ["p-pin-q"] = "idle" }
+    text_pending["p-pin-q"] = 2 -- 前两次 process-info 报前台只有 shell → 排队
+    argv_log = {}
+    delivery.deliver("p-pin-q", "codex", "queued pinned", { submit_key = "enter", channel = "text" })
+    assert.truthy(delivery.pending_count() == 1, "channel=text 未就绪进入排队")
+    vim.wait(4000, function()
+      return delivery.pending_count() == 0
+    end, 20)
+    assert.truthy(delivery.pending_count() == 0, "前台就绪后自动 flush")
+    assert.truthy(not argv_contains(function(argv)
+      return argv[3] == "prompt"
+    end), "排队重试保持文本通道（不改道 agent prompt）")
+    assert.truthy(not argv_contains(function(argv)
+      return argv[2] == "agent" and argv[3] == "list"
+    end), "排队全程不查 agent 注册表（覆写随 item 保留）")
+    assert.truthy(
+      argv_contains(function(argv)
+        return argv[3] == "send-text" and argv[4] == "p-pin-q"
+      end),
+      "排队 flush 后经 send-text 送出"
+    )
+    text_pending["p-pin-q"] = nil
+
+    -- 5d) per-call opts.channel = "agent"：config agent_channel=false 也走 agent 通道
+    config_mod.options.delivery.agent_channel = false
+    delivery._reset()
+    fake_agents = { ["p-pin-agent"] = "idle" }
+    argv_log = {}
+    local pin_agent_done = nil
+    delivery.deliver("p-pin-agent", "codex", "agent pinned", {
+      submit_key = "enter",
+      channel = "agent",
+      on_done = function(ok)
+        pin_agent_done = ok
+      end,
+    })
+    assert.truthy(pin_agent_done == true, "channel=agent 覆盖 config=false（agent prompt 成功）")
+    assert.truthy(
+      argv_contains(function(argv)
+        return argv[3] == "prompt" and argv[4] == "p-pin-agent" and argv[5] == "agent pinned"
+      end),
+      "channel=agent 经 agent prompt 原文直传"
+    )
+
+    -- 5e) 排队存活：channel=agent 的排队项（blocked → wait 解除）仍走 agent prompt
+    delivery._reset()
+    fake_agents = { ["p-pin-agent-q"] = "blocked" }
+    argv_log = {}
+    delivery.deliver("p-pin-agent-q", "codex", "queued agent pinned", { submit_key = "enter", channel = "agent" })
+    assert.truthy(delivery.pending_count() == 1, "channel=agent blocked 进入排队（不向弹窗送输入）")
+    vim.wait(4000, function()
+      return delivery.pending_count() == 0
+    end, 20)
+    assert.truthy(delivery.pending_count() == 0, "blocked 解除后自动 flush")
+    assert.truthy(not argv_contains(function(argv)
+      return argv[3] == "send-text"
+    end), "排队重试保持 agent 通道（不改道 send-text）")
+    assert.truthy(
+      argv_contains(function(argv)
+        return argv[3] == "prompt" and argv[4] == "p-pin-agent-q"
+      end),
+      "排队 flush 后经 agent prompt 提交（config=false 仍被 per-call 覆盖）"
     )
     config_mod.options.delivery.agent_channel = true
 
