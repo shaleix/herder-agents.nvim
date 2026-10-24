@@ -1,11 +1,15 @@
--- prompt 历史的快速回看（<leader>hh）：全量平铺展示，回车选中回填到输入弹窗
+-- prompt 历史读写与回看（并入原历史弹窗模块 + chat 的 save_history 迁入）：
+-- - JSON 文件按 cwd 路径分桶：history_file = { [path] = { { content, timestamp }, ... } }
+-- - M.save：chat 弹窗提交路径追加一条（read-modify-write）
+-- - M.load：全量读取，文件缺失 / 空 / JSON 损坏 → 空表（不炸）
+-- - M.input_history_view（<leader>hh）：全量平铺展示，回车选中回填到输入弹窗
 local M = {}
 local mapOpts = { noremap = true }
 local utils = require("herder-agents.utils")
 local common = require("herder-agents.ui.common")
 local config = require("herder-agents.config")
 
-local function load_history()
+function M.load()
   local f = io.open(config.options.history_file, "r")
   if not f then
     return {}
@@ -22,12 +26,43 @@ local function load_history()
   return data
 end
 
+-- 追加一条 prompt 历史（read-modify-write；路径分桶，条目 { content, timestamp }）
+function M.save(value, path)
+  local history_file = config.options.history_file
+  local history = {}
+  local f = io.open(history_file, "r")
+  if f then
+    local content = f:read("*a")
+    f:close()
+    if content and content ~= "" then
+      local ok, data = pcall(vim.fn.json_decode, content)
+      if ok then
+        history = data
+      end
+    end
+  end
+  if not history[path] then
+    history[path] = {}
+  end
+  table.insert(history[path], {
+    content = value,
+    timestamp = os.time(),
+  })
+  local json_str = vim.fn.json_encode(history)
+  f = io.open(history_file, "w")
+  if f then
+    f:write(json_str)
+    f:close()
+  end
+end
+
 function M.input_history_view(on_select)
   on_select = on_select
     or function(content)
+      -- 惰性 require：ui.chat 依赖本模块保存历史，反向直引会成环
       require("herder-agents.ui.chat").show_input_tool(config.current_tool(), content)
     end
-  local history = load_history()
+  local history = M.load()
   local cwd = vim.fn.getcwd()
   local path_history = history[cwd] or {}
 

@@ -321,7 +321,7 @@ end
 
 function M.history()
   local name = config.current_tool()
-  require("herder-agents.ui.chat_history").input_history_view(function(content)
+  require("herder-agents.ui.history").input_history_view(function(content)
     require("herder-agents.ui.chat").show_input_tool(name, content)
   end)
 end
