@@ -7,19 +7,32 @@ local M = {}
 
 local Session = {}
 
+-- 内部为单个有序 entries 数组，保插入顺序；路径统一按 utils.get_relative_path 归一比较。
+-- entry 形如 { path = <归一化相对路径>, mode = "added"|"readonly" }，
+-- add/read 只翻 mode 不动位置，drop 按 mode 无关移除。
 local function create(session_name)
   local s = {
     name = session_name,
-    added = {}, -- 可编辑上下文
-    readonly = {}, -- 只读上下文
+    entries = {},
   }
   setmetatable(s, { __index = Session })
   return s
 end
 
+---按归一化路径查找 entry 所在下标（找不到返回 nil）
+---@param relative_path string
+---@return integer|nil
+local function find(self, relative_path)
+  for i, entry in ipairs(self.entries) do
+    if entry.path == relative_path then
+      return i
+    end
+  end
+  return nil
+end
+
 function Session:clear_files()
-  self.added = {}
-  self.readonly = {}
+  self.entries = {}
 end
 
 function Session:list_files()
@@ -27,11 +40,8 @@ function Session:list_files()
     added = {},
     readonly = {},
   }
-  for _, file in ipairs(self.added) do
-    table.insert(files.added, file)
-  end
-  for _, file in ipairs(self.readonly) do
-    table.insert(files.readonly, file)
+  for _, entry in ipairs(self.entries) do
+    table.insert(files[entry.mode], entry.path)
   end
   return files
 end
@@ -41,29 +51,12 @@ function Session:add_files(file_paths)
   for _, file_path in ipairs(file_paths) do
     local relative_path = utils.get_relative_path(file_path)
 
-    -- Check if file is already in readonly, move it to added
-    for i, readonly_file in ipairs(self.readonly) do
-      local readonly_relative = utils.get_relative_path(readonly_file)
-
-      if readonly_relative == relative_path then
-        table.remove(self.readonly, i)
-        break
-      end
-    end
-
-    -- Add to added table if not already there
-    local found = false
-    for _, added_file in ipairs(self.added) do
-      local added_relative = utils.get_relative_path(added_file)
-
-      if added_relative == relative_path then
-        found = true
-        break
-      end
-    end
-
-    if not found then
-      table.insert(self.added, relative_path)
+    -- 已存在（任一 mode）→ 只翻回 added，保持原插入位置；否则追加（天然去重）
+    local i = find(self, relative_path)
+    if i then
+      self.entries[i].mode = "added"
+    else
+      table.insert(self.entries, { path = relative_path, mode = "added" })
     end
   end
 end
@@ -73,47 +66,22 @@ function Session:read_files(file_paths)
   for _, file_path in ipairs(file_paths) do
     local relative_path = utils.get_relative_path(file_path)
 
-    -- Check if file is already in added, remove it from added if found
-    for i, added_file in ipairs(self.added) do
-      local added_relative = utils.get_relative_path(added_file)
-      if added_relative == relative_path then
-        table.remove(self.added, i)
-        break
-      end
-    end
-
-    -- Add to readonly if not already there
-    local found = false
-    for _, readonly_file in ipairs(self.readonly) do
-      local readonly_relative = utils.get_relative_path(readonly_file)
-      if readonly_relative == relative_path then
-        found = true
-        break
-      end
-    end
-
-    if not found then
-      table.insert(self.readonly, relative_path)
+    -- 已存在（任一 mode）→ 只翻成 readonly，保持原插入位置；否则追加（天然去重）
+    local i = find(self, relative_path)
+    if i then
+      self.entries[i].mode = "readonly"
+    else
+      table.insert(self.entries, { path = relative_path, mode = "readonly" })
     end
   end
 end
 
 function Session:drop_files(file_paths)
   for _, file_path in ipairs(file_paths) do
-    -- Remove from added table
-    for i, added_file in ipairs(self.added) do
-      if added_file == file_path then
-        table.remove(self.added, i)
-        break
-      end
-    end
-
-    -- Remove from readonly table
-    for i, readonly_file in ipairs(self.readonly) do
-      if readonly_file == file_path then
-        table.remove(self.readonly, i)
-        break
-      end
+    -- 与 add/read 同一归一化：传绝对路径也能删掉以相对路径存的条目
+    local i = find(self, utils.get_relative_path(file_path))
+    if i then
+      table.remove(self.entries, i)
     end
   end
 end
