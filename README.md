@@ -467,6 +467,8 @@ Disable everything with `completion = { enabled = false }`.
 ```sh
 make test                                    # 全量：tests/specs（plenary，仿 neogit）
 TEST_FILES=tests/specs/herder-agents/panes_spec.lua make test   # 单个 spec
+TEST_FILES="tests/specs/herder-agents/a_spec.lua b_spec.lua" make test  # 多个（空格/逗号分隔；
+                                              # 路径不存在时硬失败，不会静默跑 0 个 spec）
 ```
 
 Each `*_spec.lua` runs in its own headless nvim instance
@@ -488,7 +490,8 @@ fires after the actual delivery),
 `require("herder-agents.ui.chat").append_tool_prompt(tool, text)` puts text into the
 agent's input box without pressing Enter.
 `require("herder-agents.delivery")` is the prompt transport: `deliver(pane_id, tool, text,
-opts)` (queue-aware send), `drop_all()`, `check_binding(name, bound_pane_id, pane)`,
-`pane_agent_running(pane_id)`.
+opts)` (queue-aware send; `opts.channel = "text"|"agent"` pins the channel for that
+single delivery — nil follows `delivery.agent_channel`, and the pin survives queueing),
+`drop_all()`, `check_binding(name, bound_pane_id, pane)`, `pane_agent_running(pane_id)`.
 `require("herder-agents.status")` starts/stops the agent status poller.
 `require("herder-agents.ui.common").dim(bufnr)` provides the float backdrop.
