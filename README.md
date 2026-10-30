@@ -445,18 +445,22 @@ opts = {
 
 Typing `herdr:` in the prompt offers every agent returned by `herdr agent list`
 for the current herdr session (across workspaces; outside a herdr session the
-list stays empty). Each candidate renders as `pane_id (workspace_name:kind)` —
-the workspace name is joined from `herdr workspace list` on every refresh
-(falling back to the workspace id). The input buffer's agent binding (written
-for the chat prompt popup and the line-prompt inline input; the note editor has
-no binding) is marked `current` in the detail line and ranked first; agents on
-the same tab
-rank next, the rest follow blink's fuzzy ranking (`filterText` matches pane id,
-workspace, kind, name, terminal title and cwd). Accepting an item inserts the
-same `pane_id (workspace_name:kind)` text you see in the menu, so the prompt
-ends up with `herdr:<pane_id> (workspace_name:kind)` — still plain prompt text;
-submission and delivery behavior are unchanged. The list is cached for 5 seconds
-with stale-while-refresh; failures degrade silently to the previous/empty list.
+list stays empty). Each candidate renders as
+`pane_id (workspace · tab · agent name)` — the workspace name is joined from
+`herdr workspace list` on every refresh (falling back to the workspace id);
+`tab` is the herdr tab id and `agent name` the agent's own name; any missing
+section is simply omitted from the tag. The right-hand detail column shows
+`kind · status` (which CLI tool the agent runs). The input buffer's agent
+binding (written for the chat prompt popup and the line-prompt inline input;
+the note editor has no binding) is marked `current` in the detail line and
+ranked first; agents on the same tab rank next, the rest follow blink's fuzzy
+ranking (`filterText` matches pane id, workspace, tab, kind, name, terminal
+title and cwd). Accepting an item inserts the same
+`pane_id (workspace · tab · agent name)` text you see in the menu, so the
+prompt ends up with `herdr:<pane_id> (workspace · tab · agent name)` — still
+plain prompt text; submission and delivery behavior are unchanged. The list is
+cached for 5 seconds with stale-while-refresh; failures degrade silently to
+the previous/empty list.
 
 Disable everything with `completion = { enabled = false }`.
 

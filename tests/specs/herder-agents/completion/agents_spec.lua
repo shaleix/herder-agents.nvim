@@ -344,35 +344,43 @@ describe("herdr: 提及补全", function()
     end
     assert.truthy(by_id["her1:p2"] ~= nil and by_id["her7:p9"] ~= nil, "agents 适配层：label = pane_id")
     assert.truthy(
-      by_id["her1:p2"].insertText == "her1:p2 (repo-a:opencode)"
-        and by_id["her7:p9"].insertText == "her7:p9 (repo-b:codex)",
-      "agents 适配层：insertText = pane_id + (workspace:kind)，与候选显示一致"
+      by_id["her1:p2"].insertText == "her1:p2 (repo-a · t1 · main)"
+        and by_id["her7:p9"].insertText == "her7:p9 (repo-b · t2)",
+      "agents 适配层：insertText = pane_id + (workspace · tab · name)，与候选显示一致（name 缺失省节）"
     )
     assert.truthy(
       by_id["her1:p2"].labelDetails ~= nil
-        and by_id["her1:p2"].labelDetails.detail == " (repo-a:opencode)"
+        and by_id["her1:p2"].labelDetails.detail == " (repo-a · t1 · main)"
         and by_id["her7:p9"].labelDetails ~= nil
-        and by_id["her7:p9"].labelDetails.detail == " (repo-b:codex)",
-      "agents 适配层：labelDetails.detail 渲染 (workspace:kind)（blink 默认 label 组件直接拼接）"
+        and by_id["her7:p9"].labelDetails.detail == " (repo-b · t2)",
+      "agents 适配层：labelDetails.detail 渲染 (workspace · tab · name)（blink 默认 label 组件直接拼接）"
     )
     assert.truthy(
-      by_id["her1:p2"].detail == "idle · current",
-      "agents 适配层：detail = status，当前 agent 追加 · current（kind 移入 labelDetails）"
+      by_id["her1:p2"].detail == "opencode · idle · current",
+      "agents 适配层：detail = kind · status，当前 agent 追加 · current"
     )
-    assert.truthy(by_id["her7:p9"].detail == "working", "agents 适配层：非当前 agent 无 current 标记")
+    assert.truthy(
+      by_id["her7:p9"].detail == "codex · working",
+      "agents 适配层：非当前 agent 无 current 标记（kind · status）"
+    )
     local f1 = by_id["her1:p2"].filterText or ""
     assert.truthy(
       f1:find("repo-a", 1, true)
+        and f1:find("t1", 1, true)
         and f1:find("opencode", 1, true)
+        and f1:find("main", 1, true)
         and f1:find("opencode: fixing bug", 1, true)
         and f1:find("/repo/a", 1, true),
-      "agents 适配层：filterText 含 workspace/kind/title/cwd"
+      "agents 适配层：filterText 含 workspace/tab/kind/name/title/cwd"
     )
     -- 无 name 的 agent 也必须带 title/cwd（表构造里 name=nil 会形成 ipairs 空洞）
     local f2 = by_id["her7:p9"].filterText or ""
     assert.truthy(
-      f2:find("repo-b", 1, true) and f2:find("codex fix bug", 1, true) and f2:find("/repo/b", 1, true),
-      "agents 适配层：filterText 对无 name 的 agent 仍含 workspace/title/cwd"
+      f2:find("repo-b", 1, true)
+        and f2:find("t2", 1, true)
+        and f2:find("codex fix bug", 1, true)
+        and f2:find("/repo/b", 1, true),
+      "agents 适配层：filterText 对无 name 的 agent 仍含 workspace/tab/title/cwd"
     )
     assert.truthy(
       (by_id["her1:p2"].documentation.value or ""):find("main", 1, true) ~= nil
@@ -457,9 +465,9 @@ describe("herdr: 提及补全", function()
 
   -- ---------------------------------------------------------------------------
   -- workspace 域限定：HERDR_WORKSPACE_ID 可解析时候选仅限同 workspace 的 agent
-  -- （跨 workspace 不出候选），(workspace:kind) 角标 / display / 打分对保留条目
-  -- 完全不变；未设置（nvim 不在 herdr 内）时 fail-open 不过滤。数据层不受影响
-  --（同 agent 列表在不同 env 下各自过滤）
+  -- （跨 workspace 不出候选），(workspace · tab · name) 角标 / display / 打分对
+  -- 保留条目完全不变；未设置（nvim 不在 herdr 内）时 fail-open 不过滤。数据层
+  -- 不受影响（同 agent 列表在不同 env 下各自过滤）
   -- ---------------------------------------------------------------------------
   local function run_workspace_scope_tests()
     local agents = require("herder-agents.agents")
@@ -546,10 +554,10 @@ describe("herdr: 提及补全", function()
       "workspace 域限定：HERDR_WORKSPACE_ID 可解析时候选仅限同 workspace（异 workspace 不出候选）"
     )
     assert.truthy(
-      ws1_items["her1:p2"].insertText == "her1:p2 (repo-a:opencode)"
+      ws1_items["her1:p2"].insertText == "her1:p2 (repo-a · t1 · main)"
         and ws1_items["her1:p2"].labelDetails ~= nil
-        and ws1_items["her1:p2"].labelDetails.detail == " (repo-a:opencode)",
-      "workspace 域限定：保留条目的 (workspace:kind) 角标不变"
+        and ws1_items["her1:p2"].labelDetails.detail == " (repo-a · t1 · main)",
+      "workspace 域限定：保留条目的 (workspace · tab · name) 角标不变"
     )
     assert.truthy(ws1_items["her1:p2"].score_offset == 10, "workspace 域限定：保留条目的 current 打分不变")
 

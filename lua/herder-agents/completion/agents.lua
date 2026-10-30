@@ -11,11 +11,13 @@
 -- 降级），本层只做 blink 协议适配：
 --   - 触发字符 ":"：仅当当前空白分隔 token 以字面 "herdr:" 开头才出候选
 --     （blink keyword 不含 ":"，从 keyword 起点回看 —— 同 completion/skills.lua）
---   - label = pane_id；insertText = pane_id + " (workspace:kind)"（与候选显示
---     完全一致，选中后原样写进 prompt）；显式 insertText 让 blink 不从
---     filterText 猜编辑范围；(workspace:kind) 同时放 labelDetails.detail ——
---     blink 默认 label 组件渲染 ctx.label .. ctx.label_detail（detail 字段默认
---     菜单不渲染）；filterText 附带 workspace/kind/name/终端标题/cwd 供模糊过滤
+--   - label = pane_id；insertText = pane_id + " (workspace · tab · name)"
+--     （与候选显示完全一致，选中后原样写进 prompt；注记任一节缺失即省略，
+--     三节皆空不挂角标）；显式 insertText 让 blink 不从 filterText 猜编辑范围；
+--     (workspace · tab · name) 同时放 labelDetails.detail —— blink 默认 label
+--     组件渲染 ctx.label .. ctx.label_detail（detail 字段默认菜单不渲染）；
+--     kind（工具名）放右列 detail 与 status 同列；filterText 附带
+--     workspace/tab/kind/name/终端标题/cwd 供模糊过滤
 --   - 排序：当前 agent score_offset 最高，其次当前 tab 的 agent，其余交给
 --     blink 模糊排序
 local M = {}
@@ -59,21 +61,33 @@ local function build_items(entries, current, current_tab)
       local kind = e.kind or ""
       local status = e.status or ""
       local ws = e.workspace or "" -- 数据层已回落 workspace_id，此处再兜底为 ""
-      -- 菜单角标：workspace:kind 随 label 拼接展示。单边缺失时优雅降级
-      -- （绝不出 "( :kind)"/"(:kind)"），双边皆空不挂角标
-      local tag
-      if ws ~= "" and kind ~= "" then
-        tag = " (" .. ws .. ":" .. kind .. ")"
-      elseif kind ~= "" then
-        tag = " (" .. kind .. ")"
-      elseif ws ~= "" then
-        tag = " (" .. ws .. ")"
+      -- 菜单角标：workspace · tab · name 三节随 label 拼接展示，任一节缺失即
+      -- 跳过（绝不出 "( · t1)" 式空段），三节皆空不挂角标；kind（工具名）
+      -- 挪右列 detail 与 status 同列，信息零丢失
+      local sections = {}
+      if ws ~= "" then
+        sections[#sections + 1] = ws
       end
-      -- detail 行只放 status（kind 已进 labelDetails）；空 status 且非当前 → 空
-      local detail = status
+      if e.tab_id and e.tab_id ~= "" then
+        sections[#sections + 1] = e.tab_id
+      end
+      if e.name and e.name ~= "" then
+        sections[#sections + 1] = e.name
+      end
+      local tag = #sections > 0 and (" (" .. table.concat(sections, " · ") .. ")") or nil
+      -- detail 行：kind · status（当前 agent 追加 · current），空节跳过；
+      -- 全空且非当前 → 空
+      local detail_parts = {}
+      if kind ~= "" then
+        detail_parts[#detail_parts + 1] = kind
+      end
+      if status ~= "" then
+        detail_parts[#detail_parts + 1] = status
+      end
       if is_current then
-        detail = (status ~= "" and (status .. " · current")) or "current"
+        detail_parts[#detail_parts + 1] = "current"
       end
+      local detail = #detail_parts > 0 and table.concat(detail_parts, " · ") or nil
       -- documentation 汇总全部寻址上下文（workspace 名 + id、name/终端标题/cwd/tab 按有则显示）
       local doc_lines = {
         ("- pane: `%s`"):format(e.pane_id),
@@ -97,8 +111,8 @@ local function build_items(entries, current, current_tab)
       if e.tab_id and e.tab_id ~= "" then
         table.insert(doc_lines, ("- tab: %s"):format(e.tab_id))
       end
-      -- label = pane_id；insertText 追加与 labelDetails 相同的 (workspace:kind)
-      -- 注记（不含触发字符；无尾随空格 —— 提及是纯文本）
+      -- label = pane_id；insertText 追加与 labelDetails 相同的 (workspace · tab ·
+      -- name) 注记（不含触发字符；无尾随空格 —— 提及是纯文本，所见即所插）
       local insert = tag and (e.pane_id .. tag) or e.pane_id
       table.insert(items, {
         label = e.pane_id,
@@ -106,7 +120,7 @@ local function build_items(entries, current, current_tab)
         kind = kind_text,
         labelDetails = tag and { detail = tag } or nil,
         detail = detail,
-        filterText = join_filter({ e.pane_id, ws, kind, e.name or "", e.title or "", e.cwd or "" }),
+        filterText = join_filter({ e.pane_id, ws, e.tab_id or "", kind, e.name or "", e.title or "", e.cwd or "" }),
         documentation = {
           kind = "markdown",
           value = table.concat(doc_lines, "\n"),
